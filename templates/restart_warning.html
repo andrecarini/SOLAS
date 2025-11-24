@@ -10,12 +10,23 @@ Variables: None (static template)
             padding: 15px; 
             margin-top: 15px; 
             border-radius: 8px;">
-    <p style="color: var(--color-warning); margin: 0 0 5px 0; font-weight: 600;">
+    <p style="color: var(--color-warning); margin: 0 0 10px 0; font-weight: 600; font-size: 16px;">
         ⚠ Runtime Restart Required
     </p>
-    <p style="color: var(--color-text-primary); margin: 0; font-size: 14px;">
+    <p style="color: var(--color-text-primary); margin: 0 0 10px 0; font-size: 14px;">
         Some packages were updated. Please restart the runtime to apply changes:
-        <br><strong>Runtime → Restart session</strong> (or `Ctrl+M` then `.` (period))
+    </p>
+    <ol style="color: var(--color-text-primary); margin: 0 0 10px 0; padding-left: 20px; font-size: 14px;">
+        <li style="margin-bottom: 5px;">
+            <strong>Restart the runtime:</strong> <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 3px;">Runtime → Restart session</code> 
+            (or press <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 3px;">Ctrl+M</code> then <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 3px;">.</code> (period))
+        </li>
+        <li style="margin-bottom: 5px;">
+            <strong>After restart, run this Setup Environment cell again</strong> to verify that the installation has completed successfully.
+        </li>
+    </ol>
+    <p style="color: var(--color-text-primary); margin: 0; font-size: 13px; font-style: italic;">
+        Note: The setup will be marked as complete only after you restart and run this cell again.
     </p>
 </div>
 

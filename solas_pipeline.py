@@ -44,6 +44,48 @@ from functools import lru_cache
 
 
 # ============================================================================
+# Setup Completion Flag
+# ============================================================================
+
+_SETUP_FLAG_FILE = Path(__file__).parent / '.solas_setup_complete'
+
+def _mark_setup_complete() -> None:
+    """Mark setup as complete by creating a flag file."""
+    try:
+        _SETUP_FLAG_FILE.touch()
+    except Exception:
+        pass  # Silently fail if we can't write the flag file
+
+def check_setup_complete() -> bool:
+    """
+    Check if setup has been completed successfully.
+    
+    Returns:
+        True if setup is complete, False otherwise
+    """
+    return _SETUP_FLAG_FILE.exists()
+
+def require_setup_complete(error_message: Optional[str] = None) -> None:
+    """
+    Require that setup has been completed. Raises an error if not.
+    
+    Args:
+        error_message: Custom error message. If None, uses default message.
+    
+    Raises:
+        RuntimeError: If setup is not complete
+    """
+    if not check_setup_complete():
+        if error_message is None:
+            error_message = (
+                "⚠️ Setup not completed. Please run the **Setup Environment** cell (Cell 1) first.\n\n"
+                "The setup cell installs all required dependencies and configures the environment.\n"
+                "After running it successfully, you can proceed with the other cells."
+            )
+        raise RuntimeError(error_message)
+
+
+# ============================================================================
 # Helper Functions
 # ============================================================================
 
@@ -1118,11 +1160,27 @@ def load_template(template_name: str, **kwargs) -> str:
     
     template_content = '\n'.join(html_lines)
     
-    # Perform variable substitution
-    try:
-        return template_content.format(**kwargs)
-    except KeyError as e:
-        raise KeyError(f"Missing required template variable: {e}")
+    # Perform variable substitution using regex to avoid conflicts with CSS variables
+    # Only replace {variable_name} patterns, not CSS variables like {--color-primary}
+    import re
+    for key, value in kwargs.items():
+        # Escape special regex characters in the key
+        escaped_key = re.escape(key)
+        # Match {key} but not {--something} (CSS variables)
+        pattern = r'\{' + escaped_key + r'\}'
+        template_content = re.sub(pattern, str(value), template_content)
+    
+    # Check if any required variables are still missing (unreplaced {variable} patterns)
+    remaining_vars = re.findall(r'\{([a-zA-Z_][a-zA-Z0-9_]*)\}', template_content)
+    # Filter out CSS variables (they start with --)
+    remaining_vars = [v for v in remaining_vars if not v.startswith('-')]
+    if remaining_vars and kwargs:
+        # Only warn if there are actual template variables (not CSS) that weren't replaced
+        missing = [v for v in remaining_vars if v not in kwargs]
+        if missing:
+            raise KeyError(f"Missing required template variable(s): {', '.join(missing)}")
+    
+    return template_content
 
 
 # ============================================================================
@@ -1132,6 +1190,7 @@ def load_template(template_name: str, **kwargs) -> str:
 def _log_setup(message: str, level: str = 'info', verbose: bool = False) -> None:
     """
     Log message based on verbosity - only prints if verbose is True.
+    Uses ANSI color codes for better readability in terminals.
     
     Args:
         message: Message to log
@@ -1142,69 +1201,52 @@ def _log_setup(message: str, level: str = 'info', verbose: bool = False) -> None
     if not verbose:
         return
     
+    # ANSI color codes
+    RESET = '\033[0m'
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    CYAN = '\033[36m'
+    BOLD = '\033[1m'
+    
     if level == 'error':
-        print(f"[SOLAS] ✗ {message}")
+        print(f"{RED}[SOLAS] ✗ {message}{RESET}")
     elif level == 'warning':
-        print(f"[SOLAS] ⚠ {message}")
+        print(f"{YELLOW}[SOLAS] ⚠ {message}{RESET}")
     elif level == 'success':
-        print(f"[SOLAS] ✓ {message}")
+        print(f"{GREEN}[SOLAS] ✓ {message}{RESET}")
     elif level == 'important':
-        print(f"[SOLAS] ⚠ {message}")
+        print(f"{BOLD}{CYAN}[SOLAS] ⚠ {message}{RESET}")
     else:
         print(f"[SOLAS] {message}")
 
 
-def _check_version_constraint(package_spec: str) -> Tuple[str, Optional[str], bool, Optional[str]]:
+def _is_package_installed(package_spec: str) -> Tuple[str, bool, Optional[str]]:
     """
-    Check if an installed package satisfies the version constraint.
+    Check if a package is installed with the exact required version.
     
     Args:
-        package_spec: Package specification like "transformers>=4.35.0" or "bitsandbytes>=0.43.1"
+        package_spec: Package specification like "transformers==4.57.1"
     
     Returns:
-        (package_name, installed_version, satisfies_constraint, constraint_str)
+        (package_name, is_installed_correctly, installed_version)
     """
-    from packaging.requirements import Requirement
-    from packaging.specifiers import SpecifierSet
+    # Parse package name and version from "package==version" format
+    if '==' not in package_spec:
+        pkg_name = package_spec.strip()
+        return (pkg_name, False, None)
     
-    # Parse package spec using packaging.requirements.Requirement
-    try:
-        req = Requirement(package_spec)
-        pkg_name = req.name
-        # Get all version specifiers and combine them
-        if req.specifier:
-            constraint = str(req.specifier)
-            # Extract minimum version for display (first >= specifier)
-            constraint_str = None
-            for spec in req.specifier:
-                if spec.operator in ('>=', '>', '==', '~='):
-                    constraint_str = spec.version
-                    break
-        else:
-            constraint = None
-            constraint_str = None
-    except Exception:
-        # Fallback to simple parsing if Requirement fails
-        pkg_name = package_spec.split('>=')[0].split('==')[0].split('<')[0].split(',')[0].strip()
-        constraint = None
-        constraint_str = None
+    pkg_name, required_version = package_spec.split('==', 1)
+    pkg_name = pkg_name.strip()
+    required_version = required_version.strip()
     
     # Check if installed
     try:
         installed_version = importlib.metadata.version(pkg_name)
+        is_correct = (installed_version == required_version)
+        return (pkg_name, is_correct, installed_version)
     except importlib.metadata.PackageNotFoundError:
-        return (pkg_name, None, False, constraint_str)
-    
-    # Check if constraint is satisfied
-    if constraint is None:
-        return (pkg_name, installed_version, True, None)
-    
-    try:
-        spec = SpecifierSet(constraint)
-        satisfies = spec.contains(installed_version)
-        return (pkg_name, installed_version, satisfies, constraint_str)
-    except Exception:
-        return (pkg_name, installed_version, False, constraint_str)
+        return (pkg_name, False, None)
 
 
 def _get_system_package_version(package_name: str) -> Optional[str]:
@@ -1396,24 +1438,34 @@ def _update_progress_bar_only(step, progress: int, step_bars: dict) -> None:
         step_bars[step].value = progress
 
 
-# Package list - includes torch/torchvision/torchaudio (removed Step 3)
-_SETUP_PYTHON_PACKAGES = [
-    "torch>=2.0.0,<3.0",
-    "torchvision>=2.0.0,<3.0",
-    "torchaudio>=2.0.0,<3.0",
-    "transformers>=4.55.4,<5.0",  # Minimum for BitsAndBytesConfig stability
-    "accelerate>=1.11.0,<2.0",
-    "librosa>=0.11.0,<1.0",
-    "pydub>=0.25.1,<1.0",
-    "SoundFile>=0.13.1,<1.0",
-    "datasets>=4.0.0,<5.0",
-    "sentencepiece>=0.2.1,<1.0",
-    "ipywidgets>=7.7.1,<8.0",
-    "widgetsnbextension>=3.6.10,<4.0",
-    "bitsandbytes>=0.48.2,<1.0",
-    "coqui-tts>=0.27.2,<1.0",
-    "tqdm>=4.67.1,<5.0",
-]
+def _load_requirements() -> List[str]:
+    """
+    Load package requirements from requirements.txt file.
+    
+    Returns:
+        List of package specifications (e.g., ["torch==2.9.0", "transformers==4.57.1"])
+    """
+    requirements_path = Path(__file__).parent / 'requirements.txt'
+    
+    if not requirements_path.exists():
+        raise FileNotFoundError(
+            f"requirements.txt not found at {requirements_path}. "
+            "Please create it with the required package versions."
+        )
+    
+    packages = []
+    with open(requirements_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            # Skip comments and empty lines
+            if line and not line.startswith('#'):
+                packages.append(line)
+    
+    return packages
+
+
+# Load package list from requirements.txt
+_SETUP_PYTHON_PACKAGES = _load_requirements()
 
 # System packages for Colab
 _SETUP_SYSTEM_PACKAGES = [
@@ -1427,88 +1479,45 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
                          step_labels: Optional[dict] = None, step_bars: Optional[dict] = None,
                          substeps_container: Optional[Any] = None, verbose: bool = False) -> Tuple[bool, bool]:
     """
-    Install packages, checking if they're already installed and satisfy constraints first.
+    Install packages, checking if they're already installed with exact versions first.
     
     Returns:
         Tuple of (packages_installed, bnb_updated)
     """
-    from packaging.requirements import Requirement
-    from packaging.specifiers import SpecifierSet
-    from packaging import version as pkg_version
     
-    # Track if bitsandbytes specifically is updated
-    bnb_updated = False
-    
+    # Quick check: are all packages already installed with correct versions?
+    all_correct = True
     if check_first:
-        _log_setup(f"Checking {len(pkgs)} package(s) against version constraints...", 'important', verbose)
-    to_install = []
-    version_issues = []  # Track packages with version issues for warnings
-    
-    total_pkgs = len(pkgs)
-    checked_count = 0
-    
-    for pkg in pkgs:
-        if check_first:
-            checked_count += 1
-            
-            # Update progress bar for this step
+        _log_setup(f"Checking {len(pkgs)} package(s)...", 'important', verbose)
+        total_pkgs = len(pkgs)
+        for idx, pkg in enumerate(pkgs):
+            # Update progress bar during checking
             if progress_step is not None and step_bars is not None:
-                progress_pct = int((checked_count / total_pkgs) * 50)  # 0-50% for checking
+                progress_pct = int((idx / total_pkgs) * 100)
                 _update_progress_bar_only(progress_step, progress_pct, step_bars)
             
-            # Show progress every 3 packages or for first/last
-            if checked_count == 1 or checked_count == total_pkgs or checked_count % 3 == 0:
-                try:
-                    req = Requirement(pkg)
-                    pkg_display = req.name
-                except Exception:
-                    pkg_display = pkg.split('>=')[0].split('==')[0].split('<')[0].split(',')[0].strip()
-                if verbose:
-                    _log_setup(f"Checking {pkg_display} ({checked_count}/{total_pkgs})...", 'info', verbose)
-            
-            pkg_name, installed_ver, satisfies, constraint_str = _check_version_constraint(pkg)
-            if installed_ver is not None:
-                if satisfies:
-                    _log_setup(f"{pkg_name}=={installed_ver} already installed (satisfies {constraint_str})", 'success', verbose)
-                    continue
-                
-                # Version doesn't satisfy constraint
-                try:
-                    # Check if installed version actually satisfies constraint (might be a parsing issue)
-                    if constraint_str:
-                        try:
-                            spec = SpecifierSet(f">={constraint_str}")
-                            if spec.contains(installed_ver):
-                                # Actually satisfies - keep it
-                                _log_setup(f"{pkg_name}=={installed_ver} already installed (satisfies {constraint_str})", 'success', verbose)
-                                continue
-                        except Exception:
-                            pass
-                    
-                    # Version doesn't satisfy constraint
-                    _log_setup(f"{pkg_name}=={installed_ver} installed but doesn't satisfy constraint (need {pkg})", 'warning', verbose)
-                    to_install.append(pkg)
-                    version_issues.append((pkg_name, installed_ver, constraint_str, "version_mismatch"))
-                except Exception:
-                    _log_setup(f"{pkg_name}=={installed_ver} installed but doesn't satisfy constraint (need {constraint_str})", 'warning', verbose)
-                    to_install.append(pkg)
-                    version_issues.append((pkg_name, installed_ver, constraint_str, "unknown"))
-            else:
-                _log_setup(f"{pkg_name} not installed, will install", 'info', verbose)
-                to_install.append(pkg)
+            _, is_correct, _ = _is_package_installed(pkg)
+            if not is_correct:
+                all_correct = False
+                break
+        
+        # Ensure progress bar is at 100% after checking
+        if progress_step is not None and step_bars is not None:
+            _update_progress_bar_only(progress_step, 100, step_bars)
+        
+        if all_correct:
+            _log_setup("All packages are installed with correct versions", 'success', verbose)
+            # No installation happened, so no restart needed
+            # Progress widget will be updated to 'complete' by caller
+            return False, False
         else:
-            to_install.append(pkg)
+            _log_setup("Some packages need installation/upgrade, installing all packages...", 'important', verbose)
     
-    if check_first and to_install:
-        _log_setup(f"Found {len(to_install)} package(s) that need installation/upgrade", 'important', verbose)
-    elif check_first:
-        _log_setup("All packages satisfy version constraints", 'success', verbose)
-    
-    if to_install:
-        # Check if bitsandbytes is in the list to be installed/upgraded
-        for pkg in to_install:
-            if 'bitsandbytes' in pkg.lower():
-                bnb_updated = True
+    # Install all packages - pip will skip/upgrade/downgrade as needed
+    # Only check for bitsandbytes if we're actually installing (not all were correct)
+    if not all_correct or not check_first:
+        # Check if bitsandbytes is in the package list - if we install, it might need restart
+        bnb_updated = any('bitsandbytes' in pkg.lower() for pkg in pkgs)
         
         try:
             # Reveal substeps container
@@ -1519,24 +1528,22 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
             if progress_step is not None and step_bars is not None:
                 _update_progress_bar_only(progress_step, 0, step_bars)
             
-            _log_setup(f"Installing {len(to_install)} package(s)...", 'important', verbose)
+            _log_setup(f"Installing {len(pkgs)} package(s)...", 'important', verbose)
             # Extract package names for display
             pkg_names = []
-            for p in to_install:
-                try:
-                    req = Requirement(p)
-                    pkg_names.append(req.name)
-                except Exception:
-                    # Fallback
-                    pkg_names.append(p.split('>=')[0].split('==')[0].split('<')[0].split(',')[0].split('[')[0].strip())
+            for p in pkgs:
+                if '==' in p:
+                    pkg_names.append(p.split('==')[0].strip())
+                else:
+                    pkg_names.append(p.strip())
             if verbose:
                 _log_setup(f"Packages: {', '.join(pkg_names)}", 'important', verbose)
             
-            # Build pip command
+            # Build pip command - install all packages, pip will handle what's needed
             if verbose:
-                cmd = [sys.executable, "-m", "pip", "install", "-v"] + to_install
+                cmd = [sys.executable, "-m", "pip", "install", "-v"] + pkgs
             else:
-                cmd = [sys.executable, "-m", "pip", "install"] + to_install
+                cmd = [sys.executable, "-m", "pip", "install"] + pkgs
             
             # Update progress bar to 10% (running pip)
             if progress_step is not None and step_bars is not None:
@@ -1621,31 +1628,15 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
             sys.stdout.flush()
             
             if returncode == 0:
-                _log_setup(f"Successfully installed {len(to_install)} package(s)", 'success', verbose)
+                _log_setup(f"Successfully installed packages", 'success', verbose)
+                return True, bnb_updated
             else:
-                _log_setup(f"Failed to install {len(to_install)} package(s) (exit code: {returncode})", 'error', verbose)
+                _log_setup(f"Failed to install packages (exit code: {returncode})", 'error', verbose)
                 _log_setup("You may need to manually install failed packages", 'warning', verbose)
-            
-            # Verify installed versions satisfy constraints
-            failed_constraints = []
-            for pkg in to_install:
-                pkg_name, installed_ver, satisfies, constraint_str = _check_version_constraint(pkg)
-                if installed_ver and not satisfies:
-                    failed_constraints.append((pkg_name, installed_ver, constraint_str))
-            
-            if failed_constraints:
-                _log_setup("⚠ WARNING: Some packages were installed but don't satisfy version constraints:", 'warning', verbose)
-                for pkg_name, installed_ver, constraint_str in failed_constraints:
-                    _log_setup(f"  • {pkg_name}=={installed_ver} (required: {constraint_str})", 'warning', verbose)
-                _log_setup("  You may need to manually install compatible versions.", 'warning', verbose)
-            
-            return True, bnb_updated
+                return False, bnb_updated
         except Exception as e:
             _log_setup(f"pip install failed: {e}", 'error', verbose)
             return False, bnb_updated
-    else:
-        _log_setup("All packages already installed with correct versions", 'success', verbose)
-        return False, bnb_updated
 
 
 def _apt_check_packages(pkgs_with_constraints: List[Tuple[str, Optional[str]]], progress_step: Optional[int] = None,
@@ -1816,21 +1807,35 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
     total_pkgs = len(package_list)
     for idx, pkg_spec in enumerate(package_list):
         try:
-            pkg_name, installed_ver, satisfies, constraint_str = _check_version_constraint(pkg_spec)
-            if constraint_str is None:
-                constraint_str = "Any"
-            status = "✓" if (installed_ver and satisfies) else "✗" if installed_ver else "—"
+            # Extract required version from spec
+            if '==' in pkg_spec:
+                pkg_name, required_ver = pkg_spec.split('==', 1)
+                pkg_name = pkg_name.strip()
+                required_ver = required_ver.strip()
+            else:
+                pkg_name = pkg_spec.strip()
+                required_ver = "Any"
+            
+            # Check if installed with correct version
+            _, is_correct, installed_ver = _is_package_installed(pkg_spec)
+            
+            status = "✓" if is_correct else "✗" if installed_ver else "—"
             dependency_data.append({
                 'name': pkg_name,
-                'constraint': constraint_str,
+                'required': required_ver,
                 'installed': installed_ver or "Not installed",
                 'status': status
             })
         except Exception as e:
             _log_setup(f'WARNING: Error checking package {pkg_spec}: {e}', 'warning', verbose)
+            # Extract package name from spec
+            if '==' in pkg_spec:
+                pkg_name = pkg_spec.split('==')[0].strip()
+            else:
+                pkg_name = pkg_spec.strip()
             dependency_data.append({
-                'name': pkg_spec.split('>=')[0].split('==')[0].split('<')[0].strip(),
-                'constraint': 'Unknown',
+                'name': pkg_name,
+                'required': 'Unknown',
                 'installed': 'Error',
                 'status': '✗'
             })
@@ -1851,7 +1856,7 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
         dependency_rows_html += f"""
         <tr>
             <td><strong>{dep['name']}</strong></td>
-            <td>{dep['constraint']}</td>
+            <td>{dep['required']}</td>
             <td>{dep['installed']}</td>
             <td class="{status_class}">{dep['status']}</td>
         </tr>
@@ -1860,7 +1865,7 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
     # Load dependency table template
     table_html = load_template('dependency_table.html', dependency_rows=dependency_rows_html)
     
-    # Check if all packages satisfy constraints
+    # Check if all packages match required versions
     if progress_step is not None and step_labels is not None and step_bars is not None:
         _update_progress_widget("Finalizing setup...", progress_step, 5, 'active', 80, step_labels, step_bars)
     
@@ -1876,7 +1881,7 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
         if failed_packages:
             failed_names = ', '.join([dep['name'] for dep in failed_packages])
             completion_title = '<h3 style="color: var(--color-error); margin-bottom: 15px;">⚠ Setup Incomplete</h3>'
-            completion_items = f'<p style="color: var(--color-error); margin: 8px 0;">⚠ {len(failed_packages)} package(s) do not satisfy version constraints: {failed_names}</p>'
+            completion_items = f'<p style="color: var(--color-error); margin: 8px 0;">⚠ {len(failed_packages)} package(s) do not match required versions: {failed_names}</p>'
         elif missing_packages:
             missing_names = ', '.join([dep['name'] for dep in missing_packages])
             completion_title = '<h3 style="color: var(--color-warning); margin-bottom: 15px;">⚠ Setup Incomplete</h3>'
@@ -1907,10 +1912,10 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
         error_details = []
         if failed_packages:
             for dep in failed_packages:
-                error_details.append(f"<li><strong>{dep['name']}</strong>: Installed {dep['installed']} (required: ≥ {dep['constraint']})</li>")
+                error_details.append(f"<li><strong>{dep['name']}</strong>: Installed {dep['installed']} (required: {dep['required']})</li>")
         if missing_packages:
             for dep in missing_packages:
-                error_details.append(f"<li><strong>{dep['name']}</strong>: Not installed (required: ≥ {dep['constraint']})</li>")
+                error_details.append(f"<li><strong>{dep['name']}</strong>: Not installed (required: {dep['required']})</li>")
         
         if error_details:
             error_html = f"""
@@ -1928,7 +1933,7 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
                 </ul>
                 <p style="color: var(--color-error); margin-top: 15px; font-size: 14px;">
                     <strong>To fix:</strong> Run the setup cell again, or manually install the packages with:<br>
-                    <code style="background: #f8f9fa; color: #202124; padding: 2px 6px; border-radius: 3px; border: 1px solid #dadce0;">!pip install PACKAGE_NAME>=VERSION</code>
+                    <code style="background: #f8f9fa; color: #202124; padding: 2px 6px; border-radius: 3px; border: 1px solid #dadce0;">!pip install PACKAGE_NAME==VERSION</code>
                 </p>
             </div>
             """
@@ -1955,6 +1960,11 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
     
     # IMPORTANT: Restart check happens at the END, after HTML is displayed
     restart_needed = bnb_updated
+    
+    # Mark setup as complete only if restart is not needed
+    # If restart is needed, user must restart and run setup again
+    if not restart_needed:
+        _mark_setup_complete()
     
     return {
         'restart_needed': restart_needed,

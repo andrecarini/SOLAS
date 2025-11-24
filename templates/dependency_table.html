@@ -1,0 +1,111 @@
+<!--
+Template: dependency_table.html
+Purpose: Dependency status table with styles
+Usage: Load with load_template('dependency_table.html', dependency_rows=rows_html)
+Variables:
+  - dependency_rows: HTML string containing <tr> elements for each dependency
+-->
+
+<style>
+/* Light theme (default) */
+:root {
+    --color-primary: #1a73e8;
+    --color-success: #34a853;
+    --color-warning: #f9ab00;
+    --color-error: #ea4335;
+    --color-text-primary: #202124;
+    --color-text-secondary: #5f6368;
+    --color-bg-primary: #ffffff;
+    --color-bg-secondary: #f8f9fa;
+    --color-border: #dadce0;
+}
+
+/* Colab dark theme detection */
+[theme="dark"] :root,
+.theme-dark :root,
+html[theme="dark"] :root {
+    --color-primary: #8ab4f8;
+    --color-success: #81c995;
+    --color-warning: #fdd663;
+    --color-error: #f28b82;
+    --color-text-primary: #e8eaed;
+    --color-text-secondary: #9aa0a6;
+    --color-bg-primary: #202124;
+    --color-bg-secondary: #292a2d;
+    --color-border: #5f6368;
+}
+
+/* Fallback to prefers-color-scheme if Colab theme not detected */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --color-primary: #8ab4f8;
+        --color-success: #81c995;
+        --color-warning: #fdd663;
+        --color-error: #f28b82;
+        --color-text-primary: #e8eaed;
+        --color-text-secondary: #9aa0a6;
+        --color-bg-primary: #202124;
+        --color-bg-secondary: #292a2d;
+        --color-border: #5f6368;
+    }
+}
+
+.dependency-table {
+    width: auto;
+    border-collapse: collapse;
+    margin: 10px 0;
+    font-family: 'Roboto', 'Segoe UI', sans-serif;
+    font-size: 13px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.dependency-table th {
+    background-color: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    padding: 4px 10px;
+    text-align: left;
+    font-weight: 500;
+    border-bottom: 1px solid var(--color-border);
+}
+.dependency-table td {
+    padding: 3px 10px;
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+}
+.dependency-table tr:last-child td {
+    border-bottom: none;
+}
+.dependency-table tr:hover {
+    background-color: var(--color-bg-secondary);
+}
+.status-ok {
+    color: var(--color-success);
+    font-weight: bold;
+    text-align: center;
+}
+.status-fail {
+    color: var(--color-error);
+    font-weight: bold;
+    text-align: center;
+}
+.status-missing {
+    color: var(--color-warning);
+    font-weight: bold;
+    text-align: center;
+}
+</style>
+
+<table class="dependency-table">
+    <thead>
+        <tr>
+            <th>Package</th>
+            <th>Required</th>
+            <th>Installed</th>
+            <th style="text-align: center">Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        {dependency_rows}
+    </tbody>
+</table>

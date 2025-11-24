@@ -1,0 +1,21 @@
+<!--
+Template: restart_warning.html
+Purpose: Warning message when runtime restart is required
+Usage: Load with load_template('restart_warning.html')
+Variables: None (static template)
+-->
+
+<div style="background: color-mix(in srgb, var(--color-warning) 20%, var(--color-bg-primary)); 
+            border-left: 4px solid var(--color-warning); 
+            padding: 15px; 
+            margin-top: 15px; 
+            border-radius: 8px;">
+    <p style="color: var(--color-warning); margin: 0 0 5px 0; font-weight: 600;">
+        ⚠ Runtime Restart Required
+    </p>
+    <p style="color: var(--color-text-primary); margin: 0; font-size: 14px;">
+        Some packages were updated. Please restart the runtime to apply changes:
+        <br><strong>Runtime → Restart session</strong> (or `Ctrl+M` then `.` (period))
+    </p>
+</div>
+

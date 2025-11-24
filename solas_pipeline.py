@@ -1,11 +1,16 @@
 """
-SOLAS Pipeline: Core processing logic for the Self-hosted Open-source Lecture Assistant System.
+SOLAS Pipeline: Collection of functions for SOLAS pipeline execution and notebook interaction.
 
-This module provides a non-interactive, parameter-driven pipeline that processes lecture audio
-into translated transcripts, summaries, and podcast audio.
+This module provides:
+1. Core pipeline functions for processing lecture audio into translated transcripts, summaries, and podcast audio
+2. Interactive notebook helper functions for setup, widget creation, and results display
+3. Template loading utilities for HTML display
 
-Main Entry Point:
+Main Pipeline Entry Point:
     run_pipeline(config: dict) -> dict: Execute the full pipeline with given configuration.
+
+Main Setup Entry Point:
+    setup_environment_with_progress(verbose: bool) -> dict: Setup environment with progress tracking.
 
 Input:
     SOLAS_CONFIG dictionary with all parameters (see implementation-plan.md for structure).
@@ -17,47 +22,25 @@ Output:
     - performance_metrics: Timing and resource usage for each stage
 """
 
+"""
+Standard library imports only - heavy dependencies imported lazily in functions.
+This allows the module to be imported before dependencies are installed (for setup functions).
+"""
 import os
 import sys
 import time
 import gc
 import warnings
+import subprocess
+import shutil
+import platform
+import importlib.metadata
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional, Callable
 from functools import lru_cache
 
-import torch
-import torchaudio
-import numpy as np
-import soundfile as sf
-from transformers import (
-    AutoModelForSpeechSeq2Seq,
-    AutoProcessor,
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    BitsAndBytesConfig,
-)
-# TTS import is lazy - only imported when synthesize_podcast is called
-
-# Progress bar support
-try:
-    from tqdm.auto import tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
-    def tqdm(iterable=None, *args, **kwargs):
-        if iterable is None:
-            return iterable
-        return iterable
-
-# Silence benign pydub regex SyntaxWarnings
-warnings.filterwarnings("ignore", category=SyntaxWarning, module=r"pydub\.utils")
-
-# Performance monitoring
-try:
-    import psutil
-except ImportError:
-    psutil = None
+# Heavy dependencies are imported lazily in functions that need them
+# This allows importing this module before dependencies are installed
 
 
 # ============================================================================
@@ -66,15 +49,23 @@ except ImportError:
 
 def _get_device() -> str:
     """Get the appropriate device (cuda or cpu)."""
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
 
 
-def _get_compute_dtype() -> torch.dtype:
+def _get_compute_dtype():
     """Get the appropriate compute dtype based on device availability."""
-    return torch.float16 if torch.cuda.is_available() else torch.float32
+    try:
+        import torch
+        return torch.float16 if torch.cuda.is_available() else torch.float32
+    except ImportError:
+        return None  # Will be handled by calling code
 
 
-def _create_quantization_config(quantization: Optional[str], compute_dtype: torch.dtype) -> Optional[BitsAndBytesConfig]:
+def _create_quantization_config(quantization: Optional[str], compute_dtype) -> Optional[Any]:
     """
     Create quantization configuration if requested.
     
@@ -142,7 +133,7 @@ def _create_quantization_config(quantization: Optional[str], compute_dtype: torc
 
 
 @lru_cache(maxsize=3)
-def ensure_llm(model_id: str, quantization: Optional[str] = None) -> Tuple[AutoTokenizer, AutoModelForCausalLM]:
+def ensure_llm(model_id: str, quantization: Optional[str] = None) -> Tuple[Any, Any]:
     """
     Load and cache a language model with optional quantization.
     
@@ -153,6 +144,9 @@ def ensure_llm(model_id: str, quantization: Optional[str] = None) -> Tuple[AutoT
     Output:
         Tuple of (tokenizer, model)
     """
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    import torch
+    
     compute_dtype = _get_compute_dtype()
     
     # If using 4-bit quantization, ensure bitsandbytes is imported and available
@@ -268,18 +262,23 @@ def _collect_performance_metrics(stage_name: str, start_time: float, start_vram:
     metrics = {"time_seconds": time_seconds}
     
     # VRAM usage
-    if torch.cuda.is_available():
-        end_vram = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
-        peak_vram = torch.cuda.max_memory_allocated() / (1024 ** 3)  # GB
-        metrics["peak_vram_gb"] = peak_vram
-        metrics["end_vram_gb"] = end_vram
-    else:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            end_vram = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
+            peak_vram = torch.cuda.max_memory_allocated() / (1024 ** 3)  # GB
+            metrics["peak_vram_gb"] = peak_vram
+            metrics["end_vram_gb"] = end_vram
+        else:
+            metrics["peak_vram_gb"] = 0.0
+    except ImportError:
         metrics["peak_vram_gb"] = 0.0
     
     # CPU usage (if psutil available)
-    if psutil is not None:
+    try:
+        import psutil
         metrics["avg_cpu_percent"] = psutil.cpu_percent(interval=0.1)
-    else:
+    except ImportError:
         metrics["avg_cpu_percent"] = 0.0
     
     return metrics
@@ -289,7 +288,7 @@ def _collect_performance_metrics(stage_name: str, start_time: float, start_vram:
 # Pipeline Stage Functions
 # ============================================================================
 
-def load_and_preprocess_audio(audio_path: str) -> Tuple[torch.Tensor, int]:
+def load_and_preprocess_audio(audio_path: str) -> Tuple[Any, int]:
     """
     Load audio from file, resample to 16kHz, convert to mono, and normalize.
     
@@ -299,6 +298,10 @@ def load_and_preprocess_audio(audio_path: str) -> Tuple[torch.Tensor, int]:
     Output:
         Tuple of (processed_audio_tensor, sample_rate)
     """
+    import torch
+    import torchaudio
+    import soundfile as sf
+    
     try:
         audio_waveform, audio_sample_rate = sf.read(audio_path, dtype='float32')
     except Exception:
@@ -333,7 +336,7 @@ def load_and_preprocess_audio(audio_path: str) -> Tuple[torch.Tensor, int]:
     return waveform.contiguous(), target_sr
 
 
-def transcribe_audio(audio_tensor: torch.Tensor, sample_rate: int, config: Dict[str, Any]) -> str:
+def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]) -> str:
     """
     Transcribe audio using Whisper ASR model.
     
@@ -345,6 +348,10 @@ def transcribe_audio(audio_tensor: torch.Tensor, sample_rate: int, config: Dict[
     Output:
         Transcribed text (str)
     """
+    import torch
+    import numpy as np
+    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+    
     device = _get_device()
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     
@@ -424,7 +431,10 @@ def transcribe_audio(audio_tensor: torch.Tensor, sample_rate: int, config: Dict[
     estimated_processing_time = max(5.0, audio_duration_seconds / 20.0)  # Conservative estimate
     start_time = time.time()
     
-    if TQDM_AVAILABLE:
+    # Try to use tqdm for progress if available
+    try:
+        from tqdm.auto import tqdm
+        import threading
         # Use tqdm progress bar
         pbar = tqdm(total=100, desc="Transcribing", unit="%", ncols=80)
         
@@ -435,7 +445,6 @@ def transcribe_audio(audio_tensor: torch.Tensor, sample_rate: int, config: Dict[
             return elapsed < estimated_processing_time * 1.5  # Stop updating after 1.5x estimate
         
         # Start a simple timer-based progress update
-        import threading
         stop_flag = threading.Event()
         
         def progress_updater():
@@ -446,7 +455,7 @@ def transcribe_audio(audio_tensor: torch.Tensor, sample_rate: int, config: Dict[
         
         progress_thread = threading.Thread(target=progress_updater, daemon=True)
         progress_thread.start()
-    else:
+    except ImportError:
         progress_thread = None
         stop_flag = None
     
@@ -456,7 +465,7 @@ def transcribe_audio(audio_tensor: torch.Tensor, sample_rate: int, config: Dict[
             **gen_kwargs
         )
     
-    if TQDM_AVAILABLE and progress_thread:
+    if progress_thread is not None:
         stop_flag.set()
         if progress_thread.is_alive():
             progress_thread.join(timeout=1.0)
@@ -468,6 +477,7 @@ def transcribe_audio(audio_tensor: torch.Tensor, sample_rate: int, config: Dict[
     print(f"[ASR] Transcription complete. ({actual_time:.1f}s, {speed_factor:.1f}x real-time)")
     
     # Cleanup
+    import torch
     del model, processor
     gc.collect()
     if torch.cuda.is_available():
@@ -536,6 +546,7 @@ def translate_transcript(transcript: str, config: Dict[str, Any]) -> str:
             fallback_prompt = f"System: {system_prompt}\nUser: {user_prompt}\nAssistant:"
             input_ids = tokenizer(fallback_prompt, return_tensors="pt").input_ids
         
+        import torch
         model_device = next(model.parameters()).device
         input_ids = input_ids.to(model_device)
         attention_mask = torch.ones_like(input_ids, dtype=torch.long, device=model_device)
@@ -631,6 +642,7 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
             )
             input_ids = tokenizer(fallback_prompt, return_tensors="pt").input_ids
         
+        import torch
         model_device = next(model.parameters()).device
         input_ids = input_ids.to(model_device)
         attention_mask = torch.ones_like(input_ids, dtype=torch.long, device=input_ids.device)
@@ -778,6 +790,7 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
         fallback_prompt = f"System: {system_prompt}\nUser: {user_prompt}\nAssistant:"
         input_ids = tokenizer(fallback_prompt, return_tensors="pt").input_ids
     
+    import torch
     model_device = next(model.parameters()).device
     input_ids = input_ids.to(model_device)
     attention_mask = torch.ones_like(input_ids, dtype=torch.long, device=model_device)
@@ -877,6 +890,7 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
     # Determine output sample rate
     output_sample_rate = getattr(tts_engine, "output_sample_rate", 24000)
     
+    import numpy as np
     lines = [line.strip() for line in script.splitlines() if line.strip()]
     segments = []
     
@@ -906,6 +920,7 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
         raise RuntimeError("No audio segments were generated.")
     
     # Concatenate and save
+    import soundfile as sf
     final_audio = np.concatenate(segments)
     out_dir = Path(output_directory)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1004,6 +1019,7 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     
     # Calculate audio duration for RTF
     try:
+        import soundfile as sf
         audio_info = sf.info(podcast_audio_path)
         audio_duration = audio_info.duration
         tts_metrics["audio_duration_seconds"] = audio_duration
@@ -1054,6 +1070,1013 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
         },
         "performance_metrics": performance_metrics,
     }
+
+
+# ============================================================================
+# Template Loading Functions
+# ============================================================================
+
+def load_template(template_name: str, **kwargs) -> str:
+    """
+    Load and format an HTML template from the templates directory.
+    
+    Args:
+        template_name: Name of the template file (e.g., 'warning_non_colab.html')
+        **kwargs: Variables for template substitution
+    
+    Returns:
+        Formatted HTML string with variables substituted
+    
+    Raises:
+        FileNotFoundError: If template file doesn't exist
+        KeyError: If required template variable is missing
+    """
+    template_path = Path(__file__).parent / 'templates' / template_name
+    
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_name}")
+    
+    with open(template_path, 'r', encoding='utf-8') as f:
+        template_content = f.read()
+    
+    # Remove HTML comments (template documentation)
+    # Keep only the actual HTML content
+    lines = template_content.split('\n')
+    html_lines = []
+    in_comment = False
+    
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('<!--'):
+            in_comment = True
+            continue
+        if in_comment and stripped.endswith('-->'):
+            in_comment = False
+            continue
+        if not in_comment:
+            html_lines.append(line)
+    
+    template_content = '\n'.join(html_lines)
+    
+    # Perform variable substitution
+    try:
+        return template_content.format(**kwargs)
+    except KeyError as e:
+        raise KeyError(f"Missing required template variable: {e}")
+
+
+# ============================================================================
+# Setup & Environment Functions
+# ============================================================================
+
+def _log_setup(message: str, level: str = 'info', verbose: bool = False) -> None:
+    """
+    Log message based on verbosity - only prints if verbose is True.
+    
+    Args:
+        message: Message to log
+        level: Log level ('info', 'success', 'warning', 'error', 'important')
+        verbose: If True, print message. If False, silent (widgets/HTML handle display)
+    """
+    # Only show if verbose - no exceptions for error/warning
+    if not verbose:
+        return
+    
+    if level == 'error':
+        print(f"[SOLAS] ✗ {message}")
+    elif level == 'warning':
+        print(f"[SOLAS] ⚠ {message}")
+    elif level == 'success':
+        print(f"[SOLAS] ✓ {message}")
+    elif level == 'important':
+        print(f"[SOLAS] ⚠ {message}")
+    else:
+        print(f"[SOLAS] {message}")
+
+
+def _check_version_constraint(package_spec: str) -> Tuple[str, Optional[str], bool, Optional[str]]:
+    """
+    Check if an installed package satisfies the version constraint.
+    
+    Args:
+        package_spec: Package specification like "transformers>=4.35.0" or "bitsandbytes>=0.43.1"
+    
+    Returns:
+        (package_name, installed_version, satisfies_constraint, constraint_str)
+    """
+    from packaging.requirements import Requirement
+    from packaging.specifiers import SpecifierSet
+    
+    # Parse package spec using packaging.requirements.Requirement
+    try:
+        req = Requirement(package_spec)
+        pkg_name = req.name
+        # Get all version specifiers and combine them
+        if req.specifier:
+            constraint = str(req.specifier)
+            # Extract minimum version for display (first >= specifier)
+            constraint_str = None
+            for spec in req.specifier:
+                if spec.operator in ('>=', '>', '==', '~='):
+                    constraint_str = spec.version
+                    break
+        else:
+            constraint = None
+            constraint_str = None
+    except Exception:
+        # Fallback to simple parsing if Requirement fails
+        pkg_name = package_spec.split('>=')[0].split('==')[0].split('<')[0].split(',')[0].strip()
+        constraint = None
+        constraint_str = None
+    
+    # Check if installed
+    try:
+        installed_version = importlib.metadata.version(pkg_name)
+    except importlib.metadata.PackageNotFoundError:
+        return (pkg_name, None, False, constraint_str)
+    
+    # Check if constraint is satisfied
+    if constraint is None:
+        return (pkg_name, installed_version, True, None)
+    
+    try:
+        spec = SpecifierSet(constraint)
+        satisfies = spec.contains(installed_version)
+        return (pkg_name, installed_version, satisfies, constraint_str)
+    except Exception:
+        return (pkg_name, installed_version, False, constraint_str)
+
+
+def _get_system_package_version(package_name: str) -> Optional[str]:
+    """Get installed version of a system package using dpkg"""
+    try:
+        result = subprocess.run(
+            ["dpkg", "-l", package_name],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode == 0 and 'ii' in result.stdout:
+            # Parse version from dpkg output: "ii  package  version  arch  description"
+            lines = result.stdout.strip().split('\n')
+            for line in lines:
+                if line.startswith('ii') and package_name in line:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        return parts[2]  # Version is the 3rd field
+        return None
+    except Exception:
+        return None
+
+
+def _compare_debian_versions(version1: str, version2: str) -> bool:
+    """Compare two Debian package versions using dpkg --compare-versions"""
+    try:
+        # dpkg --compare-versions returns 0 if version1 >= version2
+        result = subprocess.run(
+            ["dpkg", "--compare-versions", version1, "ge", version2],
+            capture_output=True,
+            check=False
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _check_system_package_satisfies_constraint(package_name: str, min_version: str) -> Tuple[bool, Optional[str]]:
+    """Check if installed system package version satisfies minimum version constraint"""
+    installed_version = _get_system_package_version(package_name)
+    if installed_version is None:
+        return False, None
+    
+    # Compare versions using dpkg
+    satisfies = _compare_debian_versions(installed_version, min_version)
+    return satisfies, installed_version
+
+
+# ============================================================================
+# Setup Progress Widget Functions
+# ============================================================================
+
+def _create_progress_widgets():
+    """
+    Create progress widgets for setup display.
+    
+    Returns:
+        Dict with 'container', 'step_labels', 'step_bars', 'step_rows', 'substeps_container'
+    """
+    try:
+        import ipywidgets as widgets
+    except ImportError:
+        # If ipywidgets not available, return None widgets
+        return None
+    
+    step_labels = {
+        1: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 1/5: Checking system dependencies...</div>'),
+        2: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 2/5: Installing system dependencies...</div>'),
+        3: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 3/5: Checking Python dependencies...</div>'),
+        4: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 4/5: Installing Python dependencies...</div>'),
+        '4a': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Collecting packages...</div>'),
+        '4b': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Downloading packages...</div>'),
+        '4c': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Building wheels...</div>'),
+        '4d': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Uninstalling old versions...</div>'),
+        '4e': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Installing packages...</div>'),
+        5: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 5/5: Finalizing setup...</div>'),
+    }
+    
+    step_bars = {
+        1: widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+        2: widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+        3: widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+        4: widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+        '4a': widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+        '4b': widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+        '4c': widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+        '4d': widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+        '4e': widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+        5: widgets.IntProgress(value=0, min=0, max=100, bar_style='', layout=widgets.Layout(width='200px', height='20px', margin='0 0 0 10px')),
+    }
+    
+    # Create HBox for each step (label + bar side by side)
+    step_rows = {
+        1: widgets.HBox([step_labels[1], step_bars[1]], layout=widgets.Layout(margin='4px 0')),
+        2: widgets.HBox([step_labels[2], step_bars[2]], layout=widgets.Layout(margin='4px 0')),
+        3: widgets.HBox([step_labels[3], step_bars[3]], layout=widgets.Layout(margin='4px 0')),
+        4: widgets.HBox([step_labels[4], step_bars[4]], layout=widgets.Layout(margin='4px 0')),
+        '4a': widgets.HBox([step_labels['4a'], step_bars['4a']], layout=widgets.Layout(margin='2px 0')),
+        '4b': widgets.HBox([step_labels['4b'], step_bars['4b']], layout=widgets.Layout(margin='2px 0')),
+        '4c': widgets.HBox([step_labels['4c'], step_bars['4c']], layout=widgets.Layout(margin='2px 0')),
+        '4d': widgets.HBox([step_labels['4d'], step_bars['4d']], layout=widgets.Layout(margin='2px 0')),
+        '4e': widgets.HBox([step_labels['4e'], step_bars['4e']], layout=widgets.Layout(margin='2px 0')),
+        5: widgets.HBox([step_labels[5], step_bars[5]], layout=widgets.Layout(margin='4px 0')),
+    }
+    
+    # Container for sub-steps 4a-4e (initially hidden)
+    substeps_container = widgets.VBox([
+        step_rows['4a'],
+        step_rows['4b'],
+        step_rows['4c'],
+        step_rows['4d'],
+        step_rows['4e'],
+    ], layout=widgets.Layout(display='none'))
+    
+    progress_container = widgets.VBox([
+        widgets.HTML('<h3 style="color: var(--color-primary); margin-bottom: 10px;">🔧 Setting up SOLAS Environment</h3>'),
+        step_rows[1],
+        step_rows[2],
+        step_rows[3],
+        step_rows[4],
+        substeps_container,
+        step_rows[5],
+    ], layout=widgets.Layout(padding='10px'))
+    
+    return {
+        'container': progress_container,
+        'step_labels': step_labels,
+        'step_bars': step_bars,
+        'step_rows': step_rows,
+        'substeps_container': substeps_container
+    }
+
+
+def _update_progress_widget(message: str, step, total: int, status: str, progress: Optional[int],
+                           step_labels: dict, step_bars: dict) -> None:
+    """Update progress widget display"""
+    if step is None:
+        return
+    
+    # Update the specific step indicator
+    if status == 'active':
+        icon = '⏳'
+        color = 'var(--color-primary)'
+        weight = 'bold'
+        bar_style = 'info'
+    elif status == 'complete':
+        icon = '✓'
+        color = 'var(--color-success)'
+        weight = 'normal'
+        bar_style = 'success'
+    else:  # pending
+        icon = '⏺'
+        color = 'var(--color-text-secondary)'
+        weight = 'normal'
+        bar_style = ''
+    
+    # Handle substeps (string keys) vs main steps (numeric keys)
+    if isinstance(step, str):
+        # Substep - no "Step X/Y" prefix
+        margin_left = 'margin-left: 20px;' if step.startswith('4') else ''
+        step_html = f'<div style="color: {color}; font-weight: {weight}; width: 420px; {margin_left}">{icon} {message}</div>'
+    else:
+        # Main step - requires total
+        if total is not None:
+            step_html = f'<div style="color: {color}; font-weight: {weight}; width: 420px;">{icon} Step {step}/{total}: {message}</div>'
+        else:
+            step_html = f'<div style="color: {color}; font-weight: {weight}; width: 420px;">{icon} {message}</div>'
+    
+    if step in step_labels:
+        step_labels[step].value = step_html
+    
+    # Update progress bar
+    if step in step_bars:
+        if progress is not None:
+            step_bars[step].value = progress
+        elif status == 'complete':
+            step_bars[step].value = 100
+        elif status == 'active':
+            # Set to indeterminate (just show as active, no specific progress)
+            step_bars[step].value = 50
+        
+        step_bars[step].bar_style = bar_style
+
+
+def _update_progress_bar_only(step, progress: int, step_bars: dict) -> None:
+    """Update only the progress bar percentage without changing the step label"""
+    if step in step_bars:
+        step_bars[step].value = progress
+
+
+# Package list - includes torch/torchvision/torchaudio (removed Step 3)
+_SETUP_PYTHON_PACKAGES = [
+    "torch>=2.0.0,<3.0",
+    "torchvision>=2.0.0,<3.0",
+    "torchaudio>=2.0.0,<3.0",
+    "transformers>=4.55.4,<5.0",  # Minimum for BitsAndBytesConfig stability
+    "accelerate>=1.11.0,<2.0",
+    "librosa>=0.11.0,<1.0",
+    "pydub>=0.25.1,<1.0",
+    "SoundFile>=0.13.1,<1.0",
+    "datasets>=4.0.0,<5.0",
+    "sentencepiece>=0.2.1,<1.0",
+    "ipywidgets>=7.7.1,<8.0",
+    "widgetsnbextension>=3.6.10,<4.0",
+    "bitsandbytes>=0.48.2,<1.0",
+    "coqui-tts>=0.27.2,<1.0",
+    "tqdm>=4.67.1,<5.0",
+]
+
+# System packages for Colab
+_SETUP_SYSTEM_PACKAGES = [
+    ("espeak-ng", "1.50+dfsg-10ubuntu0.1"),
+    ("libsndfile1", "1.0.31-2ubuntu0.2"),
+    ("ffmpeg", "7:4.4.2-0ubuntu0.22.04.1"),
+]
+
+
+def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_step: Optional[int] = None,
+                         step_labels: Optional[dict] = None, step_bars: Optional[dict] = None,
+                         substeps_container: Optional[Any] = None, verbose: bool = False) -> Tuple[bool, bool]:
+    """
+    Install packages, checking if they're already installed and satisfy constraints first.
+    
+    Returns:
+        Tuple of (packages_installed, bnb_updated)
+    """
+    from packaging.requirements import Requirement
+    from packaging.specifiers import SpecifierSet
+    from packaging import version as pkg_version
+    
+    # Track if bitsandbytes specifically is updated
+    bnb_updated = False
+    
+    if check_first:
+        _log_setup(f"Checking {len(pkgs)} package(s) against version constraints...", 'important', verbose)
+    to_install = []
+    version_issues = []  # Track packages with version issues for warnings
+    
+    total_pkgs = len(pkgs)
+    checked_count = 0
+    
+    for pkg in pkgs:
+        if check_first:
+            checked_count += 1
+            
+            # Update progress bar for this step
+            if progress_step is not None and step_bars is not None:
+                progress_pct = int((checked_count / total_pkgs) * 50)  # 0-50% for checking
+                _update_progress_bar_only(progress_step, progress_pct, step_bars)
+            
+            # Show progress every 3 packages or for first/last
+            if checked_count == 1 or checked_count == total_pkgs or checked_count % 3 == 0:
+                try:
+                    req = Requirement(pkg)
+                    pkg_display = req.name
+                except Exception:
+                    pkg_display = pkg.split('>=')[0].split('==')[0].split('<')[0].split(',')[0].strip()
+                if verbose:
+                    _log_setup(f"Checking {pkg_display} ({checked_count}/{total_pkgs})...", 'info', verbose)
+            
+            pkg_name, installed_ver, satisfies, constraint_str = _check_version_constraint(pkg)
+            if installed_ver is not None:
+                if satisfies:
+                    _log_setup(f"{pkg_name}=={installed_ver} already installed (satisfies {constraint_str})", 'success', verbose)
+                    continue
+                
+                # Version doesn't satisfy constraint
+                try:
+                    # Check if installed version actually satisfies constraint (might be a parsing issue)
+                    if constraint_str:
+                        try:
+                            spec = SpecifierSet(f">={constraint_str}")
+                            if spec.contains(installed_ver):
+                                # Actually satisfies - keep it
+                                _log_setup(f"{pkg_name}=={installed_ver} already installed (satisfies {constraint_str})", 'success', verbose)
+                                continue
+                        except Exception:
+                            pass
+                    
+                    # Version doesn't satisfy constraint
+                    _log_setup(f"{pkg_name}=={installed_ver} installed but doesn't satisfy constraint (need {pkg})", 'warning', verbose)
+                    to_install.append(pkg)
+                    version_issues.append((pkg_name, installed_ver, constraint_str, "version_mismatch"))
+                except Exception:
+                    _log_setup(f"{pkg_name}=={installed_ver} installed but doesn't satisfy constraint (need {constraint_str})", 'warning', verbose)
+                    to_install.append(pkg)
+                    version_issues.append((pkg_name, installed_ver, constraint_str, "unknown"))
+            else:
+                _log_setup(f"{pkg_name} not installed, will install", 'info', verbose)
+                to_install.append(pkg)
+        else:
+            to_install.append(pkg)
+    
+    if check_first and to_install:
+        _log_setup(f"Found {len(to_install)} package(s) that need installation/upgrade", 'important', verbose)
+    elif check_first:
+        _log_setup("All packages satisfy version constraints", 'success', verbose)
+    
+    if to_install:
+        # Check if bitsandbytes is in the list to be installed/upgraded
+        for pkg in to_install:
+            if 'bitsandbytes' in pkg.lower():
+                bnb_updated = True
+        
+        try:
+            # Reveal substeps container
+            if substeps_container is not None:
+                substeps_container.layout.display = 'block'
+            
+            # Update main progress bar to 0% (starting installation)
+            if progress_step is not None and step_bars is not None:
+                _update_progress_bar_only(progress_step, 0, step_bars)
+            
+            _log_setup(f"Installing {len(to_install)} package(s)...", 'important', verbose)
+            # Extract package names for display
+            pkg_names = []
+            for p in to_install:
+                try:
+                    req = Requirement(p)
+                    pkg_names.append(req.name)
+                except Exception:
+                    # Fallback
+                    pkg_names.append(p.split('>=')[0].split('==')[0].split('<')[0].split(',')[0].split('[')[0].strip())
+            if verbose:
+                _log_setup(f"Packages: {', '.join(pkg_names)}", 'important', verbose)
+            
+            # Build pip command
+            if verbose:
+                cmd = [sys.executable, "-m", "pip", "install", "-v"] + to_install
+            else:
+                cmd = [sys.executable, "-m", "pip", "install"] + to_install
+            
+            # Update progress bar to 10% (running pip)
+            if progress_step is not None and step_bars is not None:
+                _update_progress_bar_only(progress_step, 10, step_bars)
+            
+            if verbose:
+                print(f"[SOLAS] Executing: {' '.join(cmd)}")
+                sys.stdout.flush()
+            
+            # Run pip with output capture for progress tracking
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1  # Line buffered
+            )
+            
+            # Track progress through different pip phases
+            seen_collecting = False
+            seen_downloading = False
+            seen_building = False
+            seen_uninstalling = False
+            seen_installing = False
+            
+            if verbose:
+                print(f"[SOLAS] VERBOSE MODE: Streaming pip output in real-time...")
+                sys.stdout.flush()
+            
+            # Stream output line by line and track progress
+            for line in process.stdout:
+                if verbose:
+                    print(line, end='', flush=True)
+                
+                # Update progress based on pip phases
+                if progress_step is not None and step_labels is not None and step_bars is not None:
+                    line_lower = line.lower()
+                    
+                    if not seen_collecting and line_lower.startswith('collecting'):
+                        seen_collecting = True
+                        _update_progress_widget('Collecting packages...', '4a', 5, 'active', 50, step_labels, step_bars)
+                        _update_progress_bar_only(progress_step, 15, step_bars)
+                    elif not seen_downloading and (line_lower.startswith('downloading') or line_lower.startswith('obtaining')):
+                        seen_downloading = True
+                        _update_progress_widget('Collecting packages...', '4a', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Downloading packages...', '4b', 5, 'active', 50, step_labels, step_bars)
+                        _update_progress_bar_only(progress_step, 30, step_bars)
+                    elif not seen_building and (line_lower.startswith('building wheels') or 'preparing metadata (pyproject.toml)' in line_lower):
+                        seen_building = True
+                        _update_progress_widget('Collecting packages...', '4a', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Downloading packages...', '4b', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Building wheels...', '4c', 5, 'active', 50, step_labels, step_bars)
+                        _update_progress_bar_only(progress_step, 55, step_bars)
+                    elif not seen_uninstalling and line_lower.startswith('attempting uninstall'):
+                        seen_uninstalling = True
+                        _update_progress_widget('Collecting packages...', '4a', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Downloading packages...', '4b', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Building wheels...', '4c', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Uninstalling old versions...', '4d', 5, 'active', 50, step_labels, step_bars)
+                        _update_progress_bar_only(progress_step, 65, step_bars)
+                    elif not seen_installing and line_lower.startswith('installing collected packages'):
+                        seen_installing = True
+                        _update_progress_widget('Collecting packages...', '4a', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Downloading packages...', '4b', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Building wheels...', '4c', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Uninstalling old versions...', '4d', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_widget('Installing packages...', '4e', 5, 'active', 50, step_labels, step_bars)
+                        _update_progress_bar_only(progress_step, 85, step_bars)
+                    elif line_lower.startswith('successfully installed'):
+                        _update_progress_widget('Installing packages...', '4e', 5, 'complete', 100, step_labels, step_bars)
+                        _update_progress_bar_only(progress_step, 98, step_bars)
+            
+            process.wait()
+            returncode = process.returncode
+            
+            # Ensure we hit 100% at the end
+            if progress_step is not None and step_bars is not None:
+                _update_progress_bar_only(progress_step, 100, step_bars)
+            
+            if verbose:
+                print(f"\n[SOLAS] Pip command completed with exit code: {returncode}")
+            sys.stdout.flush()
+            
+            if returncode == 0:
+                _log_setup(f"Successfully installed {len(to_install)} package(s)", 'success', verbose)
+            else:
+                _log_setup(f"Failed to install {len(to_install)} package(s) (exit code: {returncode})", 'error', verbose)
+                _log_setup("You may need to manually install failed packages", 'warning', verbose)
+            
+            # Verify installed versions satisfy constraints
+            failed_constraints = []
+            for pkg in to_install:
+                pkg_name, installed_ver, satisfies, constraint_str = _check_version_constraint(pkg)
+                if installed_ver and not satisfies:
+                    failed_constraints.append((pkg_name, installed_ver, constraint_str))
+            
+            if failed_constraints:
+                _log_setup("⚠ WARNING: Some packages were installed but don't satisfy version constraints:", 'warning', verbose)
+                for pkg_name, installed_ver, constraint_str in failed_constraints:
+                    _log_setup(f"  • {pkg_name}=={installed_ver} (required: {constraint_str})", 'warning', verbose)
+                _log_setup("  You may need to manually install compatible versions.", 'warning', verbose)
+            
+            return True, bnb_updated
+        except Exception as e:
+            _log_setup(f"pip install failed: {e}", 'error', verbose)
+            return False, bnb_updated
+    else:
+        _log_setup("All packages already installed with correct versions", 'success', verbose)
+        return False, bnb_updated
+
+
+def _apt_check_packages(pkgs_with_constraints: List[Tuple[str, Optional[str]]], progress_step: Optional[int] = None,
+                       step_bars: Optional[dict] = None, verbose: bool = False) -> Tuple[List[str], List[str]]:
+    """
+    Check system packages against version constraints.
+    
+    Returns:
+        (to_install, to_upgrade) lists of package names
+    """
+    to_install = []
+    to_upgrade = []
+    
+    try:
+        if not shutil.which("apt-get"):
+            _log_setup("apt-get not available (not on Debian/Ubuntu system)", 'warning', verbose)
+            return [], []
+        
+        # Normalize input: convert strings to (name, None) tuples
+        normalized_pkgs = []
+        for pkg in pkgs_with_constraints:
+            if isinstance(pkg, tuple):
+                normalized_pkgs.append(pkg)
+            else:
+                normalized_pkgs.append((pkg, None))
+        
+        # Update package list first (needed for version checks)
+        if progress_step is not None and step_bars is not None:
+            _update_progress_bar_only(progress_step, 10, step_bars)
+        _log_setup("Updating package list (this may take a moment)...", 'important', verbose)
+        if verbose:
+            print("[SOLAS] Running: apt-get update -y...")
+            subprocess.run(["apt-get", "update", "-y"], check=True)
+        else:
+            subprocess.run(
+                ["apt-get", "update", "-y"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+        _log_setup("Package list updated", 'success', verbose)
+        
+        total_pkgs = len(normalized_pkgs)
+        checked = 0
+        
+        for pkg_name, min_version in normalized_pkgs:
+            checked += 1
+            if progress_step is not None and step_bars is not None:
+                progress_pct = 10 + int((checked / total_pkgs) * 90)  # 10-100% for checking
+                _update_progress_bar_only(progress_step, progress_pct, step_bars)
+            installed_version = _get_system_package_version(pkg_name)
+            
+            if installed_version is not None:
+                # Package is installed - check if it satisfies constraint
+                if min_version:
+                    satisfies, _ = _check_system_package_satisfies_constraint(pkg_name, min_version)
+                    if satisfies:
+                        _log_setup(f"{pkg_name}=={installed_version} already installed (satisfies >= {min_version})", 'success', verbose)
+                    else:
+                        to_upgrade.append(pkg_name)
+                        _log_setup(f"{pkg_name}=={installed_version} installed but doesn't satisfy constraint (need >= {min_version})", 'warning', verbose)
+                else:
+                    # No version constraint - just check if installed
+                    _log_setup(f"{pkg_name}=={installed_version} already installed", 'success', verbose)
+            else:
+                # Package not installed
+                to_install.append(pkg_name)
+                if min_version:
+                    _log_setup(f"{pkg_name} not installed (will install >= {min_version})", 'info', verbose)
+                else:
+                    _log_setup(f"{pkg_name} not installed, will install", 'info', verbose)
+        
+        return to_install, to_upgrade
+        
+    except Exception as e:
+        _log_setup(f"apt checking failed: {e}", 'error', verbose)
+        return [], []
+
+
+def _apt_install_packages(to_install: List[str], to_upgrade: List[str], progress_step: Optional[int] = None,
+                         step_bars: Optional[dict] = None, verbose: bool = False) -> None:
+    """Install or upgrade system packages."""
+    try:
+        # Install missing packages and upgrade outdated ones
+        packages_to_process = to_install + to_upgrade
+        if packages_to_process:
+            action = "Installing" if to_install and not to_upgrade else "Upgrading" if to_upgrade and not to_install else "Installing/upgrading"
+            _log_setup(f"{action} {len(packages_to_process)} system package(s): {', '.join(packages_to_process)}", 'important', verbose)
+            cmd = ["apt-get", "install", "-y"]
+            # Only add --only-upgrade if we're ONLY upgrading (no new installs)
+            if to_upgrade and not to_install:
+                cmd.append("--only-upgrade")
+            cmd.extend(packages_to_process)
+            
+            if progress_step is not None and step_bars is not None:
+                _update_progress_bar_only(progress_step, 10, step_bars)
+            _log_setup(f"Running apt-get install (this may take a few minutes)...", 'important', verbose)
+            if verbose:
+                print(f"[SOLAS] Running: {' '.join(cmd[:5])}...")
+                subprocess.run(cmd, check=True)
+            else:
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+            if progress_step is not None and step_bars is not None:
+                _update_progress_bar_only(progress_step, 100, step_bars)
+            _log_setup("apt-get install completed", 'success', verbose)
+            if to_install:
+                _log_setup(f"Successfully installed {len(to_install)} system package(s)", 'success', verbose)
+            if to_upgrade:
+                _log_setup(f"Successfully upgraded {len(to_upgrade)} system package(s)", 'success', verbose)
+        else:
+            _log_setup("No packages to install/upgrade", 'success', verbose)
+            if progress_step is not None and step_bars is not None:
+                _update_progress_bar_only(progress_step, 100, step_bars)
+                
+    except Exception as e:
+        _log_setup(f"apt-get failed: {e}", 'error', verbose)
+
+
+def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: Optional[int] = None,
+                   step_labels: Optional[dict] = None, step_bars: Optional[dict] = None,
+                   progress_container: Optional[Any] = None, verbose: bool = False) -> Dict[str, Any]:
+    """
+    Finalize setup: GPU check, dependency table generation, restart detection.
+    
+    IMPORTANT: Restart check happens at the END, after all HTML is generated and displayed.
+    
+    Returns:
+        Dict with: restart_needed, dependency_data, gpu_available, device_name, progress_container
+    """
+    try:
+        import ipywidgets as widgets
+        from IPython.display import HTML
+    except ImportError:
+        widgets = None
+        HTML = None
+    
+    # Step 1: GPU check
+    if progress_step is not None and step_labels is not None and step_bars is not None:
+        _update_progress_widget("Finalizing setup...", progress_step, 5, 'active', 10, step_labels, step_bars)
+    
+    gpu_available = False
+    device_name = None
+    try:
+        import torch
+        if progress_step is not None and step_labels is not None and step_bars is not None:
+            _update_progress_widget("Finalizing setup...", progress_step, 5, 'active', 20, step_labels, step_bars)
+        gpu_available = torch.cuda.is_available()
+        if gpu_available:
+            device_name = torch.cuda.get_device_name(0)
+            _log_setup(f'GPU detected: {device_name}', 'success', verbose)
+        else:
+            _log_setup('WARNING: No GPU detected. This notebook will run extremely slowly without a GPU.', 'warning', verbose)
+    except ImportError:
+        _log_setup('WARNING: torch not available, skipping GPU check', 'warning', verbose)
+    except Exception as e:
+        _log_setup(f'WARNING: Error checking GPU: {e}', 'warning', verbose)
+    
+    # Step 2: Create dependency status table
+    if progress_step is not None and step_labels is not None and step_bars is not None:
+        _update_progress_widget("Finalizing setup...", progress_step, 5, 'active', 30, step_labels, step_bars)
+    
+    dependency_data = []
+    total_pkgs = len(package_list)
+    for idx, pkg_spec in enumerate(package_list):
+        try:
+            pkg_name, installed_ver, satisfies, constraint_str = _check_version_constraint(pkg_spec)
+            if constraint_str is None:
+                constraint_str = "Any"
+            status = "✓" if (installed_ver and satisfies) else "✗" if installed_ver else "—"
+            dependency_data.append({
+                'name': pkg_name,
+                'constraint': constraint_str,
+                'installed': installed_ver or "Not installed",
+                'status': status
+            })
+        except Exception as e:
+            _log_setup(f'WARNING: Error checking package {pkg_spec}: {e}', 'warning', verbose)
+            dependency_data.append({
+                'name': pkg_spec.split('>=')[0].split('==')[0].split('<')[0].strip(),
+                'constraint': 'Unknown',
+                'installed': 'Error',
+                'status': '✗'
+            })
+        # Update progress: 30% + (idx/total_pkgs) * 40% = 30-70%
+        if progress_step is not None and step_bars is not None:
+            if (idx + 1) % max(1, total_pkgs // 3) == 0 or (idx + 1) == total_pkgs:
+                progress = 30 + int((idx + 1) / total_pkgs * 40)
+                _update_progress_bar_only(progress_step, progress, step_bars)
+    
+    # Step 3: Generate HTML table using template
+    if progress_step is not None and step_labels is not None and step_bars is not None:
+        _update_progress_widget("Finalizing setup...", progress_step, 5, 'active', 70, step_labels, step_bars)
+    
+    # Build dependency table rows
+    dependency_rows_html = ""
+    for dep in dependency_data:
+        status_class = "status-ok" if dep['status'] == "✓" else "status-fail" if dep['status'] == "✗" else "status-missing"
+        dependency_rows_html += f"""
+        <tr>
+            <td><strong>{dep['name']}</strong></td>
+            <td>{dep['constraint']}</td>
+            <td>{dep['installed']}</td>
+            <td class="{status_class}">{dep['status']}</td>
+        </tr>
+        """
+    
+    # Load dependency table template
+    table_html = load_template('dependency_table.html', dependency_rows=dependency_rows_html)
+    
+    # Check if all packages satisfy constraints
+    if progress_step is not None and step_labels is not None and step_bars is not None:
+        _update_progress_widget("Finalizing setup...", progress_step, 5, 'active', 80, step_labels, step_bars)
+    
+    all_satisfied = all(dep['status'] == '✓' for dep in dependency_data) if dependency_data else False
+    failed_packages = [dep for dep in dependency_data if dep['status'] == '✗']
+    missing_packages = [dep for dep in dependency_data if dep['status'] == '—']
+    
+    # Step 4: Generate completion messages
+    if all_satisfied:
+        completion_title = '<h3 style="color: var(--color-success); margin-bottom: 15px;">✓ Setup Complete!</h3>'
+        completion_items = '<p style="color: var(--color-success); margin: 8px 0;">✓ All dependencies have been checked and installed.</p>'
+    else:
+        if failed_packages:
+            failed_names = ', '.join([dep['name'] for dep in failed_packages])
+            completion_title = '<h3 style="color: var(--color-error); margin-bottom: 15px;">⚠ Setup Incomplete</h3>'
+            completion_items = f'<p style="color: var(--color-error); margin: 8px 0;">⚠ {len(failed_packages)} package(s) do not satisfy version constraints: {failed_names}</p>'
+        elif missing_packages:
+            missing_names = ', '.join([dep['name'] for dep in missing_packages])
+            completion_title = '<h3 style="color: var(--color-warning); margin-bottom: 15px;">⚠ Setup Incomplete</h3>'
+            completion_items = f'<p style="color: var(--color-warning); margin: 8px 0;">⚠ {len(missing_packages)} package(s) are missing: {missing_names}</p>'
+        else:
+            completion_title = '<h3 style="color: var(--color-error); margin-bottom: 15px;">⚠ Setup Incomplete</h3>'
+            completion_items = '<p style="color: var(--color-error); margin: 8px 0;">⚠ Some dependencies are not satisfied.</p>'
+    
+    # GPU status
+    if gpu_available:
+        gpu_item = f'<p style="color: var(--color-success); margin: 8px 0;">✓ GPU Available: {device_name}</p>'
+    else:
+        gpu_item = '<p style="color: var(--color-error); margin: 8px 0;">⚠ No GPU Detected - Performance will be limited</p>'
+    
+    # Success message and restart warning
+    success_msg = ""
+    restart_warning_html = ""
+    
+    if bnb_updated:
+        restart_warning_html = load_template('restart_warning.html')
+    
+    if all_satisfied and not bnb_updated:
+        success_msg = load_template('success_message.html')
+    
+    # Error HTML if needed
+    error_html = ""
+    if not all_satisfied:
+        error_details = []
+        if failed_packages:
+            for dep in failed_packages:
+                error_details.append(f"<li><strong>{dep['name']}</strong>: Installed {dep['installed']} (required: ≥ {dep['constraint']})</li>")
+        if missing_packages:
+            for dep in missing_packages:
+                error_details.append(f"<li><strong>{dep['name']}</strong>: Not installed (required: ≥ {dep['constraint']})</li>")
+        
+        if error_details:
+            error_html = f"""
+            <div style="background: color-mix(in srgb, var(--color-error) 20%, var(--color-bg-primary)); 
+                        border-left: 4px solid var(--color-error); 
+                        padding: 20px; 
+                        margin-top: 20px; 
+                        border-radius: 8px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <p style="color: var(--color-error); margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">
+                    ⚠ Some dependencies are not satisfied. Please fix the following:
+                </p>
+                <ul style="color: var(--color-error); margin: 10px 0; padding-left: 20px;">
+                    {''.join(error_details)}
+                </ul>
+                <p style="color: var(--color-error); margin-top: 15px; font-size: 14px;">
+                    <strong>To fix:</strong> Run the setup cell again, or manually install the packages with:<br>
+                    <code style="background: #f8f9fa; color: #202124; padding: 2px 6px; border-radius: 3px; border: 1px solid #dadce0;">!pip install PACKAGE_NAME>=VERSION</code>
+                </p>
+            </div>
+            """
+    
+    # Load setup_complete template
+    setup_html = load_template('setup_complete.html',
+        completion_title=completion_title,
+        completion_items=completion_items,
+        gpu_item=gpu_item,
+        success_msg=success_msg,
+        restart_warning_html=restart_warning_html,
+        table_html=table_html,
+        error_html=error_html
+    )
+    
+    # Update progress container with final HTML
+    if progress_container is not None and widgets is not None and HTML is not None:
+        children_list = [widgets.HTML(setup_html)]
+        progress_container.children = children_list
+    
+    # Mark step as complete
+    if progress_step is not None and step_labels is not None and step_bars is not None:
+        _update_progress_widget("Finalizing setup...", progress_step, 5, 'complete', 100, step_labels, step_bars)
+    
+    # IMPORTANT: Restart check happens at the END, after HTML is displayed
+    restart_needed = bnb_updated
+    
+    return {
+        'restart_needed': restart_needed,
+        'dependency_data': dependency_data,
+        'gpu_available': gpu_available,
+        'device_name': device_name,
+        'progress_container': progress_container,
+        'all_satisfied': all_satisfied
+    }
+
+
+def setup_environment_with_progress(verbose: bool = False) -> Dict[str, Any]:
+    """
+    Main setup orchestrator with progress tracking.
+    
+    This function:
+    1. Creates progress widgets
+    2. Checks and installs system dependencies (Colab only)
+    3. Checks and installs Python dependencies (including torch/torchvision/torchaudio)
+    4. Finalizes setup with GPU check, dependency table, and restart detection
+    
+    IMPORTANT: Restart check happens in finalize_setup AFTER HTML is displayed.
+    
+    Args:
+        verbose: Enable verbose logging (only prints if True)
+    
+    Returns:
+        Dict with:
+        - restart_needed: bool - Whether runtime restart is required
+        - dependency_data: list - Dependency status data
+        - gpu_available: bool - Whether GPU is available
+        - device_name: str - GPU device name (if available)
+        - progress_container: widget - Progress container widget
+        - all_satisfied: bool - Whether all dependencies are satisfied
+    """
+    try:
+        from IPython.display import display
+    except ImportError:
+        display = None
+    
+    # Create progress widgets
+    widgets_data = _create_progress_widgets()
+    if widgets_data is None:
+        # Fallback if widgets not available
+        return {
+            'restart_needed': False,
+            'dependency_data': [],
+            'gpu_available': False,
+            'device_name': None,
+            'progress_container': None,
+            'all_satisfied': False
+        }
+    
+    progress_container = widgets_data['container']
+    step_labels = widgets_data['step_labels']
+    step_bars = widgets_data['step_bars']
+    substeps_container = widgets_data['substeps_container']
+    
+    # Display progress container
+    if display is not None:
+        display(progress_container)
+    
+    # Step 1: Check system dependencies (Colab only)
+    _update_progress_widget("Checking system dependencies...", 1, 5, 'active', 0, step_labels, step_bars)
+    sys_to_install = []
+    sys_to_upgrade = []
+    
+    if 'google.colab' in sys.modules:
+        sys_to_install, sys_to_upgrade = _apt_check_packages(
+            _SETUP_SYSTEM_PACKAGES,
+            progress_step=1,
+            step_bars=step_bars,
+            verbose=verbose
+        )
+    
+    _update_progress_widget("Checking system dependencies...", 1, 5, 'complete', 100, step_labels, step_bars)
+    
+    # Step 2: Install system dependencies
+    _update_progress_widget("Installing system dependencies...", 2, 5, 'active', 0, step_labels, step_bars)
+    if sys_to_install or sys_to_upgrade:
+        _apt_install_packages(sys_to_install, sys_to_upgrade, progress_step=2, step_bars=step_bars, verbose=verbose)
+    else:
+        _log_setup("All system packages are up to date", 'success', verbose)
+        _update_progress_bar_only(2, 100, step_bars)
+    
+    _update_progress_widget("Installing system dependencies...", 2, 5, 'complete', 100, step_labels, step_bars)
+    
+    # Step 3: Check Python dependencies (includes torch/torchvision/torchaudio)
+    _update_progress_widget("Checking Python dependencies...", 3, 5, 'active', 0, step_labels, step_bars)
+    _log_setup(f"Checking {len(_SETUP_PYTHON_PACKAGES)} Python packages...", 'important', verbose)
+    _update_progress_widget("Checking Python dependencies...", 3, 5, 'complete', 100, step_labels, step_bars)
+    
+    # Step 4: Install Python dependencies (includes torch/torchvision/torchaudio)
+    _update_progress_widget("Installing Python dependencies...", 4, 5, 'active', 0, step_labels, step_bars)
+    packages_installed, bnb_updated = _pip_install_packages(
+        _SETUP_PYTHON_PACKAGES,
+        check_first=True,
+        progress_step=4,
+        step_labels=step_labels,
+        step_bars=step_bars,
+        substeps_container=substeps_container,
+        verbose=verbose
+    )
+    if packages_installed:
+        _log_setup("Python package installation/update completed", 'success', verbose)
+    else:
+        _log_setup("Python package check completed (no changes needed)", 'success', verbose)
+    _update_progress_widget("Installing Python dependencies...", 4, 5, 'complete', 100, step_labels, step_bars)
+    
+    # Step 5: Finalize setup (GPU check, dependency table, restart detection)
+    # IMPORTANT: Restart check happens INSIDE finalize_setup, AFTER HTML is generated
+    result = _finalize_setup(
+        _SETUP_PYTHON_PACKAGES,
+        bnb_updated,
+        progress_step=5,
+        step_labels=step_labels,
+        step_bars=step_bars,
+        progress_container=progress_container,
+        verbose=verbose
+    )
+    
+    return result
 
 
 # ============================================================================

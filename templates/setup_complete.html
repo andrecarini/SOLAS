@@ -1,0 +1,31 @@
+<!--
+Template: setup_complete.html
+Purpose: Setup completion status display with dependency table and summary
+Usage: Load with load_template('setup_complete.html', **kwargs)
+Variables:
+  - completion_title: HTML string for completion title (e.g., "✓ Setup Complete!")
+  - completion_items: HTML string for completion items/messages
+  - gpu_item: HTML string for GPU status
+  - success_msg: HTML string for success message (empty if restart needed)
+  - restart_warning_html: HTML string for restart warning (empty if not needed)
+  - table_html: HTML string for dependency table (includes styles and table)
+  - error_html: HTML string for error details (empty if no errors)
+-->
+
+<div style="display: flex; gap: 20px; margin-top: 20px; align-items: flex-start;">
+    <div style="padding: 20px; background: var(--color-bg-secondary); border-radius: 8px; width: fit-content;">
+        <h4 style="color: var(--color-primary); margin-top: 0; margin-bottom: 15px;">Dependency Status</h4>
+        {table_html}
+    </div>
+    <div style="flex: 1; max-width: 90%;">
+        <div style="padding: 20px; background: var(--color-bg-secondary); border-radius: 8px; flex: 1; max-width: 90%;">
+            {completion_title}
+            {completion_items}
+            {gpu_item}
+            {success_msg}
+        </div>
+        {restart_warning_html}
+    </div>
+</div>
+{error_html}
+

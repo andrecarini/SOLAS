@@ -1,0 +1,16 @@
+<!--
+Template: scrollable_box.html
+Purpose: Scrollable text box with optional status badge
+Usage: load_template('scrollable_box.html', title="...", content="...", status_html="...")
+Variables:
+  - title: Box title
+  - content: HTML-escaped content to display
+  - status_html: Optional status badge HTML (use status_badge.html or empty string)
+  - height: Optional height (default: 250px)
+-->
+
+<div style="flex: 1; min-width: 0; overflow: hidden;">
+    <h5 style="margin: 0 0 5px 0; font-size: 13px; color: var(--color-text-primary);">{title}</h5>
+    {status_html}
+    <div class="scrollable-box" style="height: {height};">{content}</div>
+</div>

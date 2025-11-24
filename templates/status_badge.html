@@ -1,0 +1,10 @@
+<!--
+Template: status_badge.html
+Purpose: Inline status badge (OK/WARNING/FAIL/NO DATA)
+Usage: load_template('status_badge.html', status_class="ok|warn|fail|muted", status_text="...")
+Variables:
+  - status_class: One of: ok, warn, fail, muted
+  - status_text: Text to display (e.g., "OK", "FAIL - reason", "No data available")
+-->
+
+<div class="status-{status_class}" style="font-size: 11px; margin-bottom: 5px;">{status_text}</div>

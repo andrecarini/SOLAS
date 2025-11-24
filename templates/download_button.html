@@ -1,0 +1,15 @@
+<!--
+Template: download_button.html
+Purpose: Download button for CSV/data exports
+Usage: load_template('download_button.html', data_uri="...", filename="...")
+Variables:
+  - data_uri: The data URI (e.g., data:text/csv;base64,...)
+  - filename: The download filename
+-->
+
+<div style="margin: 15px 0;">
+    <a href="{data_uri}" download="{filename}" class="download-btn">
+        📥 Download CSV
+    </a>
+    <span style="margin-left: 10px; font-size: 12px; color: var(--color-text-secondary);">{filename}</span>
+</div>

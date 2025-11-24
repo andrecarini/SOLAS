@@ -1,0 +1,326 @@
+/*
+ * Common CSS variables and theme detection for SOLAS templates.
+ * Auto-injected at the start of all loaded templates.
+ *
+ * Theme detection priority:
+ * 1. html[theme="light"] - Explicit light theme (Colab)
+ * 2. html[theme="dark"] - Explicit dark theme (Colab)
+ * 3. @media prefers-color-scheme - Fallback when no html[theme] attribute
+ */
+
+/* Light theme (default) */
+:root {
+    /* Core colors */
+    --color-primary: #1a73e8;
+    --color-primary-dark: #1565c0;
+    --color-success: #34a853;
+    --color-success-dark: #2e7d32;
+    --color-warning: #f9ab00;
+    --color-warning-dark: #f57c00;
+    --color-error: #ea4335;
+    --color-error-dark: #c62828;
+    --color-info: #1a73e8;
+    --color-info-dark: #2196f3;
+    --color-muted: #9e9e9e;
+
+    /* Text colors */
+    --color-text-primary: #202124;
+    --color-text-secondary: #5f6368;
+
+    /* Background colors */
+    --color-bg-primary: #ffffff;
+    --color-bg-secondary: #f8f9fa;
+    --color-bg-highlight: rgba(33, 150, 243, 0.1);
+
+    /* Border colors */
+    --color-border: #dadce0;
+    --color-border-light: rgba(128, 128, 128, 0.2);
+    --color-border-primary: rgba(21, 101, 192, 0.3);
+
+    /* Section accent colors (for evaluation comparison headers) */
+    --color-accent-purple: #7b1fa2;
+    --color-accent-teal: #00897b;
+    --color-accent-indigo: #5c6bc0;
+
+    /* Status inline colors (for text) */
+    --color-status-ok: #4caf50;
+    --color-status-warn: #ff9800;
+    --color-status-fail: #ef5350;
+
+    /* Verdict cell colors */
+    --color-verdict-ok-bg: rgba(76, 175, 80, 0.2);
+    --color-verdict-ok-text: #2e7d32;
+    --color-verdict-warn-bg: rgba(255, 152, 0, 0.25);
+    --color-verdict-warn-text: #e65100;
+    --color-verdict-fail-bg: rgba(239, 83, 80, 0.2);
+    --color-verdict-fail-text: #c62828;
+}
+
+/* Explicit light theme (Colab) */
+html[theme="light"] {
+    /* Core colors */
+    --color-primary: #1a73e8;
+    --color-primary-dark: #1565c0;
+    --color-success: #34a853;
+    --color-success-dark: #2e7d32;
+    --color-warning: #f9ab00;
+    --color-warning-dark: #f57c00;
+    --color-error: #ea4335;
+    --color-error-dark: #c62828;
+    --color-info: #1a73e8;
+    --color-info-dark: #2196f3;
+    --color-muted: #9e9e9e;
+
+    /* Text colors */
+    --color-text-primary: #202124;
+    --color-text-secondary: #5f6368;
+
+    /* Background colors */
+    --color-bg-primary: #ffffff;
+    --color-bg-secondary: #f8f9fa;
+    --color-bg-highlight: rgba(33, 150, 243, 0.1);
+
+    /* Border colors */
+    --color-border: #dadce0;
+    --color-border-light: rgba(128, 128, 128, 0.2);
+    --color-border-primary: rgba(21, 101, 192, 0.3);
+
+    /* Section accent colors */
+    --color-accent-purple: #7b1fa2;
+    --color-accent-teal: #00897b;
+    --color-accent-indigo: #5c6bc0;
+
+    /* Status inline colors */
+    --color-status-ok: #4caf50;
+    --color-status-warn: #ff9800;
+    --color-status-fail: #ef5350;
+
+    /* Verdict cell colors */
+    --color-verdict-ok-bg: rgba(76, 175, 80, 0.2);
+    --color-verdict-ok-text: #2e7d32;
+    --color-verdict-warn-bg: rgba(255, 152, 0, 0.25);
+    --color-verdict-warn-text: #e65100;
+    --color-verdict-fail-bg: rgba(239, 83, 80, 0.2);
+    --color-verdict-fail-text: #c62828;
+}
+
+/* Explicit dark theme (Colab) */
+html[theme="dark"] {
+    /* Core colors */
+    --color-primary: #8ab4f8;
+    --color-primary-dark: #5d9eff;
+    --color-success: #81c995;
+    --color-success-dark: #66bb6a;
+    --color-warning: #fdd663;
+    --color-warning-dark: #ffb74d;
+    --color-error: #f28b82;
+    --color-error-dark: #ef5350;
+    --color-info: #8ab4f8;
+    --color-info-dark: #64b5f6;
+    --color-muted: #9aa0a6;
+
+    /* Text colors */
+    --color-text-primary: #e8eaed;
+    --color-text-secondary: #9aa0a6;
+
+    /* Background colors */
+    --color-bg-primary: #202124;
+    --color-bg-secondary: #292a2d;
+    --color-bg-highlight: rgba(100, 181, 246, 0.15);
+
+    /* Border colors */
+    --color-border: #5f6368;
+    --color-border-light: rgba(255, 255, 255, 0.1);
+    --color-border-primary: rgba(138, 180, 248, 0.3);
+
+    /* Section accent colors */
+    --color-accent-purple: #ce93d8;
+    --color-accent-teal: #4db6ac;
+    --color-accent-indigo: #9fa8da;
+
+    /* Status inline colors */
+    --color-status-ok: #81c995;
+    --color-status-warn: #ffb74d;
+    --color-status-fail: #ef5350;
+
+    /* Verdict cell colors */
+    --color-verdict-ok-bg: #1b3d1b;
+    --color-verdict-ok-text: #66bb6a;
+    --color-verdict-warn-bg: #3d2e0f;
+    --color-verdict-warn-text: #ffa726;
+    --color-verdict-fail-bg: #3d1515;
+    --color-verdict-fail-text: #ef5350;
+}
+
+/* Fallback for non-Colab environments (no html[theme] attribute) */
+@media (prefers-color-scheme: dark) {
+    :root:not([theme]) {
+        /* Core colors */
+        --color-primary: #8ab4f8;
+        --color-primary-dark: #5d9eff;
+        --color-success: #81c995;
+        --color-success-dark: #66bb6a;
+        --color-warning: #fdd663;
+        --color-warning-dark: #ffb74d;
+        --color-error: #f28b82;
+        --color-error-dark: #ef5350;
+        --color-info: #8ab4f8;
+        --color-info-dark: #64b5f6;
+        --color-muted: #9aa0a6;
+
+        /* Text colors */
+        --color-text-primary: #e8eaed;
+        --color-text-secondary: #9aa0a6;
+
+        /* Background colors */
+        --color-bg-primary: #202124;
+        --color-bg-secondary: #292a2d;
+        --color-bg-highlight: rgba(100, 181, 246, 0.15);
+
+        /* Border colors */
+        --color-border: #5f6368;
+        --color-border-light: rgba(255, 255, 255, 0.1);
+        --color-border-primary: rgba(138, 180, 248, 0.3);
+
+        /* Section accent colors */
+        --color-accent-purple: #ce93d8;
+        --color-accent-teal: #4db6ac;
+        --color-accent-indigo: #9fa8da;
+
+        /* Status inline colors */
+        --color-status-ok: #81c995;
+        --color-status-warn: #ffb74d;
+        --color-status-fail: #ef5350;
+
+        /* Verdict cell colors */
+        --color-verdict-ok-bg: #1b3d1b;
+        --color-verdict-ok-text: #66bb6a;
+        --color-verdict-warn-bg: #3d2e0f;
+        --color-verdict-warn-text: #ffa726;
+        --color-verdict-fail-bg: #3d1515;
+        --color-verdict-fail-text: #ef5350;
+    }
+}
+
+/* Common verdict classes */
+.verdict-ok {
+    background: var(--color-verdict-ok-bg);
+    color: var(--color-verdict-ok-text);
+}
+.verdict-warn {
+    background: var(--color-verdict-warn-bg);
+    color: var(--color-verdict-warn-text);
+}
+.verdict-fail {
+    background: var(--color-verdict-fail-bg);
+    color: var(--color-verdict-fail-text);
+}
+
+/* Status text classes (inline) */
+.status-ok { color: var(--color-status-ok); font-weight: bold; }
+.status-warn { color: var(--color-status-warn); font-weight: bold; }
+.status-fail { color: var(--color-status-fail); font-weight: bold; }
+.status-muted { color: var(--color-muted); font-style: italic; }
+
+/* Section header classes */
+.section-header {
+    border-bottom: 2px solid var(--color-primary-dark);
+    padding-bottom: 10px;
+    margin-top: 30px;
+    color: var(--color-text-primary);
+}
+.section-header-primary { border-color: var(--color-primary-dark); }
+.section-header-success { border-color: var(--color-success-dark); }
+.section-header-warning { border-color: var(--color-warning-dark); }
+.section-header-purple { border-color: var(--color-accent-purple); }
+.section-header-teal { border-color: var(--color-accent-teal); }
+.section-header-indigo { border-color: var(--color-accent-indigo); }
+
+/* Download button */
+.download-btn {
+    background: var(--color-primary);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    display: inline-block;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+.download-btn:hover {
+    opacity: 0.9;
+}
+
+/* Scrollable content box */
+.scrollable-box {
+    height: 250px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 8px;
+    font-family: monospace;
+    font-size: 11px;
+    line-height: 1.3;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+}
+
+/* Metrics table */
+.metrics-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12px;
+}
+.metrics-table th {
+    padding: 8px;
+    text-align: left;
+    border-bottom: 2px solid var(--color-primary-dark);
+    background: color-mix(in srgb, var(--color-primary-dark) 10%, var(--color-bg-primary));
+    color: var(--color-text-primary);
+}
+.metrics-table td {
+    padding: 6px;
+    border-bottom: 1px solid var(--color-border-light);
+    color: var(--color-text-primary);
+}
+.metrics-table tr:hover {
+    background: var(--color-bg-secondary);
+}
+
+/* Card container */
+.card {
+    margin: 20px 0;
+    padding: 15px;
+    border: 1px solid var(--color-border-light);
+    border-radius: 8px;
+    background: var(--color-bg-primary);
+}
+.card-title {
+    margin: 0 0 15px 0;
+    color: var(--color-primary-dark);
+}
+
+/* Info box */
+.info-box {
+    background: color-mix(in srgb, var(--color-info) 20%, var(--color-bg-primary));
+    border-left: 4px solid var(--color-info);
+    padding: 15px;
+    margin-top: 15px;
+    border-radius: 8px;
+}
+.info-box-title {
+    color: var(--color-info);
+    margin: 0;
+    font-weight: 600;
+}
+.info-box-text {
+    color: var(--color-text-primary);
+    margin: 5px 0 0 0;
+    font-size: 14px;
+}

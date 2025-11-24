@@ -1,0 +1,19 @@
+# SOLAS Python Package Requirements
+# These exact versions were tested and verified in Google Colab
+# Update this file with versions from: pip freeze | grep -E "torch|torchvision|torchaudio|transformers|accelerate|librosa|pydub|SoundFile|datasets|sentencepiece|ipywidgets|widgetsnbextension|bitsandbytes|coqui-tts|tqdm"
+
+accelerate==1.12.0
+bitsandbytes==0.48.2
+coqui-tts==0.27.0
+datasets==4.4.1
+ipywidgets==8.1.8
+librosa==0.11.0
+pydub==0.25.1
+sentencepiece==0.2.1
+SoundFile==0.13.1
+torch==2.9.1
+torchaudio==2.9.1
+torchvision==0.24.1
+tqdm==4.67.1
+transformers==4.57.1
+widgetsnbextension==4.0.15

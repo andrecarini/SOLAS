@@ -1,0 +1,20 @@
+<!--
+Template: pipeline_complete.html
+Purpose: Success message shown after pipeline execution completes
+Usage: Load with load_template('pipeline_complete.html')
+Variables: None (static template)
+-->
+
+<div style="background: color-mix(in srgb, var(--color-success) 20%, var(--color-bg-primary)); 
+            border-left: 4px solid var(--color-success); 
+            padding: 15px; 
+            margin-top: 15px; 
+            border-radius: 8px;">
+    <p style="color: var(--color-success); margin: 0; font-weight: 600;">
+        ✓ Pipeline Complete!
+    </p>
+    <p style="color: var(--color-text-primary); margin: 5px 0 0 0; font-size: 14px;">
+        All stages have completed successfully. Run the <strong>View Results</strong> cell to see the translated transcript, summary, podcast script, and generated audio.
+    </p>
+</div>
+

@@ -1,0 +1,21 @@
+<!--
+Template: host_voice_selection_ready.html
+Purpose: Info message shown before host voice selection interface
+Usage: Load with load_template('host_voice_selection_ready.html')
+Variables: None (static template)
+-->
+
+<div style="background: color-mix(in srgb, var(--color-info) 20%, var(--color-bg-primary)); 
+            border-left: 4px solid var(--color-info); 
+            padding: 15px; 
+            margin-top: 15px; 
+            border-radius: 8px;">
+    <p style="color: var(--color-info); margin: 0; font-weight: 600;">
+        ℹ Voice Selection Ready
+    </p>
+    <p style="color: var(--color-text-primary); margin: 5px 0 0 0; font-size: 14px;">
+        Select or upload voice samples for Host A and Host B below, then click <strong>"Confirm Selections"</strong>.
+        After confirming, you can proceed to the <strong>Run Pipeline</strong> cell to start processing.
+    </p>
+</div>
+

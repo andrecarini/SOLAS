@@ -57,10 +57,35 @@ display(HTML(html))
 - **Variables**: None (static template)
 - **Usage**: Display when bitsandbytes update requires restart
 
+### `setup_warning.html`
+- **Purpose**: Warning message when setup has not been completed
+- **Variables**: None (static template)
+- **Usage**: Display when user tries to run cells before completing setup
+
+### `config_not_completed.html`
+- **Purpose**: Warning message when Configuration cell has not been run
+- **Variables**: None (static template)
+- **Usage**: Display when user tries to run cells that require configuration
+
+### `audio_selection_ready.html`
+- **Purpose**: Info message shown before audio selection interface
+- **Variables**: None (static template)
+- **Usage**: Display at the start of the Upload Input Audio cell
+
 ### `success_message.html`
 - **Purpose**: Success message when setup completes
 - **Variables**: None (static template)
 - **Usage**: Display when setup completes successfully
+
+### `config_ready.html`
+- **Purpose**: Information message shown before configuration widgets
+- **Variables**: None (static template)
+- **Usage**: Display before configuration widgets in Configuration cell
+
+### `config_confirmed.html`
+- **Purpose**: Success message shown when configuration is confirmed
+- **Variables**: None (static template)
+- **Usage**: Display when user confirms configuration
 
 ### `results_display.html`
 - **Purpose**: Rich HTML display for pipeline results

@@ -44,45 +44,192 @@ from functools import lru_cache
 
 
 # ============================================================================
-# Setup Completion Flag
+# Setup Completion Check
 # ============================================================================
 
-_SETUP_FLAG_FILE = Path(__file__).parent / '.solas_setup_complete'
-
-def _mark_setup_complete() -> None:
-    """Mark setup as complete by creating a flag file."""
-    try:
-        _SETUP_FLAG_FILE.touch()
-    except Exception:
-        pass  # Silently fail if we can't write the flag file
-
-def check_setup_complete() -> bool:
+def show_setup_warning() -> None:
     """
-    Check if setup has been completed successfully.
+    Display setup warning and halt notebook execution.
     
-    Returns:
-        True if setup is complete, False otherwise
-    """
-    return _SETUP_FLAG_FILE.exists()
-
-def require_setup_complete(error_message: Optional[str] = None) -> None:
-    """
-    Require that setup has been completed. Raises an error if not.
-    
-    Args:
-        error_message: Custom error message. If None, uses default message.
+    This function loads the setup warning template, displays it, logs debug
+    messages, and raises a StopExecution exception to halt notebook execution.
+    The user must run the Setup Environment cell (Cell 1) first.
     
     Raises:
-        RuntimeError: If setup is not complete
+        StopExecution: Always raises this exception to halt execution
     """
-    if not check_setup_complete():
-        if error_message is None:
-            error_message = (
-                "⚠️ Setup not completed. Please run the **Setup Environment** cell (Cell 1) first.\n\n"
-                "The setup cell installs all required dependencies and configures the environment.\n"
-                "After running it successfully, you can proceed with the other cells."
-            )
-        raise RuntimeError(error_message)
+    verbose = get_verbosity()
+    log_setup("Setup not completed - user must run Setup Environment cell first", 'error', verbose)
+    
+    try:
+        from IPython.display import display, HTML
+        # Load and display setup warning template
+        warning_html = load_template('setup_warning.html')
+        display(HTML(warning_html))
+        log_setup("Setup warning displayed", 'info', verbose)
+    except (ImportError, NameError, FileNotFoundError, Exception) as e:
+        # If template loading fails, log error but still halt execution
+        log_setup(f"Could not display setup warning: {e}", 'error', verbose)
+        log_setup("Please run the Setup Environment cell (Cell 1) first", 'error', verbose)
+    
+    # Halt execution with custom exception that suppresses traceback
+    class StopExecution(Exception):
+        """Custom exception to halt notebook execution without showing traceback."""
+        def _render_traceback_(self):
+            pass
+    
+    log_setup("Halting execution - setup required", 'important', verbose)
+    raise StopExecution
+
+
+def show_config_warning() -> None:
+    """
+    Display configuration warning and halt notebook execution.
+    
+    This function loads the configuration warning template, displays it, logs debug
+    messages, and raises a StopExecution exception to halt notebook execution.
+    The user must run the Configuration cell (Cell 2) first.
+    
+    Raises:
+        StopExecution: Always raises this exception to halt execution
+    """
+    verbose = get_verbosity()
+    log_setup("Configuration not completed - user must run Configuration cell first", 'error', verbose)
+    
+    try:
+        from IPython.display import display, HTML
+        # Load and display configuration warning template
+        warning_html = load_template('config_not_completed.html')
+        display(HTML(warning_html))
+        log_setup("Configuration warning displayed", 'info', verbose)
+    except (ImportError, NameError, FileNotFoundError, Exception) as e:
+        # If template loading fails, log error but still halt execution
+        log_setup(f"Could not display configuration warning: {e}", 'error', verbose)
+        log_setup("Please run the Configuration cell (Cell 2) first", 'error', verbose)
+    
+    # Halt execution with custom exception that suppresses traceback
+    class StopExecution(Exception):
+        """Custom exception to halt notebook execution without showing traceback."""
+        def _render_traceback_(self):
+            pass
+    
+    log_setup("Halting execution - configuration required", 'important', verbose)
+    raise StopExecution
+
+
+# ============================================================================
+# Environment Detection Functions
+# ============================================================================
+
+def get_verbosity() -> bool:
+    """
+    Get verbosity setting from Colab secrets or environment variable.
+    
+    Checks in order:
+    1. Colab secrets (VERBOSITY)
+    2. Environment variable (VERBOSITY)
+    
+    If verbosity is enabled, prints a debug message using log_setup.
+    
+    Returns:
+        True if verbosity is set to 'DEBUG', False otherwise
+    """
+    import os
+    
+    # Try Colab secrets first
+    try:
+        from google.colab import userdata
+        verbosity = userdata.get('VERBOSITY')
+        if verbosity:
+            is_verbose = verbosity.upper() == 'DEBUG'
+        else:
+            is_verbose = False
+    except (ImportError, Exception):
+        is_verbose = False
+    
+    # Fall back to environment variable if not set via Colab
+    if not is_verbose:
+        verbosity = os.environ.get('VERBOSITY', '')
+        is_verbose = verbosity.upper() == 'DEBUG'
+    
+    return is_verbose
+
+
+def is_colab_environment() -> bool:
+    """
+    Check if running in Google Colab environment.
+    
+    Returns:
+        True if running in Colab, False otherwise
+    """
+    try:
+        import google.colab  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def check_colab_environment() -> bool:
+    """
+    Check if running in Colab and display warning if not.
+    
+    Returns:
+        True if running in Colab, False otherwise
+    """
+    verbose = get_verbosity()
+    is_colab = is_colab_environment()
+    
+    if is_colab:
+        if verbose:
+            log_setup("Running in Google Colab", 'info', verbose)
+        return True
+    else:
+        log_setup("Not running in Google Colab", 'warning', verbose)
+        try:
+            from IPython.display import display, HTML
+            # load_template is defined later in this module, but will be available at runtime
+            warning_html = load_template('warning_non_colab.html')
+            display(HTML(warning_html))
+        except (ImportError, NameError, FileNotFoundError, Exception) as e:
+            # If template loading fails, at least log the warning
+            if verbose:
+                log_setup(f"Could not display Colab warning: {e}", 'warning', verbose)
+        return False
+
+
+def show_restart_warning() -> None:
+    """
+    Display restart warning and halt notebook execution.
+    
+    This function loads the restart warning template, displays it, logs debug
+    messages, and raises a StopExecution exception to halt notebook execution.
+    The user must restart the runtime and re-run the setup cell.
+    
+    Raises:
+        StopExecution: Always raises this exception to halt execution
+    """
+    verbose = get_verbosity()
+    log_setup("Runtime restart required after bitsandbytes update", 'warning', verbose)
+    
+    try:
+        from IPython.display import display, HTML
+        # Load and display restart warning template
+        warning_html = load_template('restart_warning.html')
+        display(HTML(warning_html))
+        log_setup("Restart warning displayed", 'info', verbose)
+    except (ImportError, NameError, FileNotFoundError, Exception) as e:
+        # If template loading fails, log error but still halt execution
+        log_setup(f"Could not display restart warning: {e}", 'error', verbose)
+        log_setup("Please restart the runtime manually", 'warning', verbose)
+    
+    # Halt execution with custom exception that suppresses traceback
+    class StopExecution(Exception):
+        """Custom exception to halt notebook execution without showing traceback."""
+        def _render_traceback_(self):
+            pass
+    
+    log_setup("Halting execution - restart required", 'important', verbose)
+    raise StopExecution
 
 
 # ============================================================================
@@ -1187,7 +1334,7 @@ def load_template(template_name: str, **kwargs) -> str:
 # Setup & Environment Functions
 # ============================================================================
 
-def _log_setup(message: str, level: str = 'info', verbose: bool = False) -> None:
+def log_setup(message: str, level: str = 'info', verbose: bool = False) -> None:
     """
     Log message based on verbosity - only prints if verbose is True.
     Uses ANSI color codes for better readability in terminals.
@@ -1477,18 +1624,19 @@ _SETUP_SYSTEM_PACKAGES = [
 
 def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_step: Optional[int] = None,
                          step_labels: Optional[dict] = None, step_bars: Optional[dict] = None,
-                         substeps_container: Optional[Any] = None, verbose: bool = False) -> Tuple[bool, bool]:
+                         substeps_container: Optional[Any] = None) -> Tuple[bool, bool]:
     """
     Install packages, checking if they're already installed with exact versions first.
     
     Returns:
         Tuple of (packages_installed, bnb_updated)
     """
+    verbose = get_verbosity()
     
     # Quick check: are all packages already installed with correct versions?
     all_correct = True
     if check_first:
-        _log_setup(f"Checking {len(pkgs)} package(s)...", 'important', verbose)
+        log_setup(f"Checking {len(pkgs)} package(s)...", 'important', verbose)
         total_pkgs = len(pkgs)
         for idx, pkg in enumerate(pkgs):
             # Update progress bar during checking
@@ -1506,12 +1654,12 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
             _update_progress_bar_only(progress_step, 100, step_bars)
         
         if all_correct:
-            _log_setup("All packages are installed with correct versions", 'success', verbose)
+            log_setup("All packages are installed with correct versions", 'success', verbose)
             # No installation happened, so no restart needed
             # Progress widget will be updated to 'complete' by caller
             return False, False
         else:
-            _log_setup("Some packages need installation/upgrade, installing all packages...", 'important', verbose)
+            log_setup("Some packages need installation/upgrade, installing all packages...", 'important', verbose)
     
     # Install all packages - pip will skip/upgrade/downgrade as needed
     # Only check for bitsandbytes if we're actually installing (not all were correct)
@@ -1528,7 +1676,7 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
             if progress_step is not None and step_bars is not None:
                 _update_progress_bar_only(progress_step, 0, step_bars)
             
-            _log_setup(f"Installing {len(pkgs)} package(s)...", 'important', verbose)
+            log_setup(f"Installing {len(pkgs)} package(s)...", 'important', verbose)
             # Extract package names for display
             pkg_names = []
             for p in pkgs:
@@ -1537,7 +1685,7 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
                 else:
                     pkg_names.append(p.strip())
             if verbose:
-                _log_setup(f"Packages: {', '.join(pkg_names)}", 'important', verbose)
+                log_setup(f"Packages: {', '.join(pkg_names)}", 'important', verbose)
             
             # Build pip command - install all packages, pip will handle what's needed
             if verbose:
@@ -1628,31 +1776,32 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
             sys.stdout.flush()
             
             if returncode == 0:
-                _log_setup(f"Successfully installed packages", 'success', verbose)
+                log_setup(f"Successfully installed packages", 'success', verbose)
                 return True, bnb_updated
             else:
-                _log_setup(f"Failed to install packages (exit code: {returncode})", 'error', verbose)
-                _log_setup("You may need to manually install failed packages", 'warning', verbose)
+                log_setup(f"Failed to install packages (exit code: {returncode})", 'error', verbose)
+                log_setup("You may need to manually install failed packages", 'warning', verbose)
                 return False, bnb_updated
         except Exception as e:
-            _log_setup(f"pip install failed: {e}", 'error', verbose)
+            log_setup(f"pip install failed: {e}", 'error', verbose)
             return False, bnb_updated
 
 
 def _apt_check_packages(pkgs_with_constraints: List[Tuple[str, Optional[str]]], progress_step: Optional[int] = None,
-                       step_bars: Optional[dict] = None, verbose: bool = False) -> Tuple[List[str], List[str]]:
+                       step_bars: Optional[dict] = None) -> Tuple[List[str], List[str]]:
     """
     Check system packages against version constraints.
     
     Returns:
         (to_install, to_upgrade) lists of package names
     """
+    verbose = get_verbosity()
     to_install = []
     to_upgrade = []
     
     try:
         if not shutil.which("apt-get"):
-            _log_setup("apt-get not available (not on Debian/Ubuntu system)", 'warning', verbose)
+            log_setup("apt-get not available (not on Debian/Ubuntu system)", 'warning', verbose)
             return [], []
         
         # Normalize input: convert strings to (name, None) tuples
@@ -1666,7 +1815,7 @@ def _apt_check_packages(pkgs_with_constraints: List[Tuple[str, Optional[str]]], 
         # Update package list first (needed for version checks)
         if progress_step is not None and step_bars is not None:
             _update_progress_bar_only(progress_step, 10, step_bars)
-        _log_setup("Updating package list (this may take a moment)...", 'important', verbose)
+        log_setup("Updating package list (this may take a moment)...", 'important', verbose)
         if verbose:
             print("[SOLAS] Running: apt-get update -y...")
             subprocess.run(["apt-get", "update", "-y"], check=True)
@@ -1677,7 +1826,7 @@ def _apt_check_packages(pkgs_with_constraints: List[Tuple[str, Optional[str]]], 
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
-        _log_setup("Package list updated", 'success', verbose)
+        log_setup("Package list updated", 'success', verbose)
         
         total_pkgs = len(normalized_pkgs)
         checked = 0
@@ -1694,37 +1843,38 @@ def _apt_check_packages(pkgs_with_constraints: List[Tuple[str, Optional[str]]], 
                 if min_version:
                     satisfies, _ = _check_system_package_satisfies_constraint(pkg_name, min_version)
                     if satisfies:
-                        _log_setup(f"{pkg_name}=={installed_version} already installed (satisfies >= {min_version})", 'success', verbose)
+                        log_setup(f"{pkg_name}=={installed_version} already installed (satisfies >= {min_version})", 'success', verbose)
                     else:
                         to_upgrade.append(pkg_name)
-                        _log_setup(f"{pkg_name}=={installed_version} installed but doesn't satisfy constraint (need >= {min_version})", 'warning', verbose)
+                        log_setup(f"{pkg_name}=={installed_version} installed but doesn't satisfy constraint (need >= {min_version})", 'warning', verbose)
                 else:
                     # No version constraint - just check if installed
-                    _log_setup(f"{pkg_name}=={installed_version} already installed", 'success', verbose)
+                    log_setup(f"{pkg_name}=={installed_version} already installed", 'success', verbose)
             else:
                 # Package not installed
                 to_install.append(pkg_name)
                 if min_version:
-                    _log_setup(f"{pkg_name} not installed (will install >= {min_version})", 'info', verbose)
+                    log_setup(f"{pkg_name} not installed (will install >= {min_version})", 'info', verbose)
                 else:
-                    _log_setup(f"{pkg_name} not installed, will install", 'info', verbose)
+                    log_setup(f"{pkg_name} not installed, will install", 'info', verbose)
         
         return to_install, to_upgrade
         
     except Exception as e:
-        _log_setup(f"apt checking failed: {e}", 'error', verbose)
+        log_setup(f"apt checking failed: {e}", 'error', verbose)
         return [], []
 
 
 def _apt_install_packages(to_install: List[str], to_upgrade: List[str], progress_step: Optional[int] = None,
-                         step_bars: Optional[dict] = None, verbose: bool = False) -> None:
+                         step_bars: Optional[dict] = None) -> None:
     """Install or upgrade system packages."""
+    verbose = get_verbosity()
     try:
         # Install missing packages and upgrade outdated ones
         packages_to_process = to_install + to_upgrade
         if packages_to_process:
             action = "Installing" if to_install and not to_upgrade else "Upgrading" if to_upgrade and not to_install else "Installing/upgrading"
-            _log_setup(f"{action} {len(packages_to_process)} system package(s): {', '.join(packages_to_process)}", 'important', verbose)
+            log_setup(f"{action} {len(packages_to_process)} system package(s): {', '.join(packages_to_process)}", 'important', verbose)
             cmd = ["apt-get", "install", "-y"]
             # Only add --only-upgrade if we're ONLY upgrading (no new installs)
             if to_upgrade and not to_install:
@@ -1733,7 +1883,7 @@ def _apt_install_packages(to_install: List[str], to_upgrade: List[str], progress
             
             if progress_step is not None and step_bars is not None:
                 _update_progress_bar_only(progress_step, 10, step_bars)
-            _log_setup(f"Running apt-get install (this may take a few minutes)...", 'important', verbose)
+            log_setup(f"Running apt-get install (this may take a few minutes)...", 'important', verbose)
             if verbose:
                 print(f"[SOLAS] Running: {' '.join(cmd[:5])}...")
                 subprocess.run(cmd, check=True)
@@ -1746,23 +1896,23 @@ def _apt_install_packages(to_install: List[str], to_upgrade: List[str], progress
                 )
             if progress_step is not None and step_bars is not None:
                 _update_progress_bar_only(progress_step, 100, step_bars)
-            _log_setup("apt-get install completed", 'success', verbose)
+            log_setup("apt-get install completed", 'success', verbose)
             if to_install:
-                _log_setup(f"Successfully installed {len(to_install)} system package(s)", 'success', verbose)
+                log_setup(f"Successfully installed {len(to_install)} system package(s)", 'success', verbose)
             if to_upgrade:
-                _log_setup(f"Successfully upgraded {len(to_upgrade)} system package(s)", 'success', verbose)
+                log_setup(f"Successfully upgraded {len(to_upgrade)} system package(s)", 'success', verbose)
         else:
-            _log_setup("No packages to install/upgrade", 'success', verbose)
+            log_setup("No packages to install/upgrade", 'success', verbose)
             if progress_step is not None and step_bars is not None:
                 _update_progress_bar_only(progress_step, 100, step_bars)
                 
     except Exception as e:
-        _log_setup(f"apt-get failed: {e}", 'error', verbose)
+        log_setup(f"apt-get failed: {e}", 'error', verbose)
 
 
 def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: Optional[int] = None,
                    step_labels: Optional[dict] = None, step_bars: Optional[dict] = None,
-                   progress_container: Optional[Any] = None, verbose: bool = False) -> Dict[str, Any]:
+                   progress_container: Optional[Any] = None) -> Dict[str, Any]:
     """
     Finalize setup: GPU check, dependency table generation, restart detection.
     
@@ -1771,6 +1921,7 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
     Returns:
         Dict with: restart_needed, dependency_data, gpu_available, device_name, progress_container
     """
+    verbose = get_verbosity()
     try:
         import ipywidgets as widgets
         from IPython.display import HTML
@@ -1791,13 +1942,13 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
         gpu_available = torch.cuda.is_available()
         if gpu_available:
             device_name = torch.cuda.get_device_name(0)
-            _log_setup(f'GPU detected: {device_name}', 'success', verbose)
+            log_setup(f'GPU detected: {device_name}', 'success', verbose)
         else:
-            _log_setup('WARNING: No GPU detected. This notebook will run extremely slowly without a GPU.', 'warning', verbose)
+            log_setup('WARNING: No GPU detected. This notebook will run extremely slowly without a GPU.', 'warning', verbose)
     except ImportError:
-        _log_setup('WARNING: torch not available, skipping GPU check', 'warning', verbose)
+        log_setup('WARNING: torch not available, skipping GPU check', 'warning', verbose)
     except Exception as e:
-        _log_setup(f'WARNING: Error checking GPU: {e}', 'warning', verbose)
+        log_setup(f'WARNING: Error checking GPU: {e}', 'warning', verbose)
     
     # Step 2: Create dependency status table
     if progress_step is not None and step_labels is not None and step_bars is not None:
@@ -1827,7 +1978,7 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
                 'status': status
             })
         except Exception as e:
-            _log_setup(f'WARNING: Error checking package {pkg_spec}: {e}', 'warning', verbose)
+            log_setup(f'WARNING: Error checking package {pkg_spec}: {e}', 'warning', verbose)
             # Extract package name from spec
             if '==' in pkg_spec:
                 pkg_name = pkg_spec.split('==')[0].strip()
@@ -1961,10 +2112,8 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
     # IMPORTANT: Restart check happens at the END, after HTML is displayed
     restart_needed = bnb_updated
     
-    # Mark setup as complete only if restart is not needed
-    # If restart is needed, user must restart and run setup again
-    if not restart_needed:
-        _mark_setup_complete()
+    # Note: SETUP_COMPLETE is set in the notebook after this function returns
+    # (only if restart is not needed)
     
     return {
         'restart_needed': restart_needed,
@@ -1976,7 +2125,7 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
     }
 
 
-def setup_environment_with_progress(verbose: bool = False) -> Dict[str, Any]:
+def setup_environment_with_progress() -> Dict[str, Any]:
     """
     Main setup orchestrator with progress tracking.
     
@@ -1988,9 +2137,6 @@ def setup_environment_with_progress(verbose: bool = False) -> Dict[str, Any]:
     
     IMPORTANT: Restart check happens in finalize_setup AFTER HTML is displayed.
     
-    Args:
-        verbose: Enable verbose logging (only prints if True)
-    
     Returns:
         Dict with:
         - restart_needed: bool - Whether runtime restart is required
@@ -2000,6 +2146,8 @@ def setup_environment_with_progress(verbose: bool = False) -> Dict[str, Any]:
         - progress_container: widget - Progress container widget
         - all_satisfied: bool - Whether all dependencies are satisfied
     """
+    verbose = get_verbosity()
+    
     try:
         from IPython.display import display
     except ImportError:
@@ -2036,8 +2184,7 @@ def setup_environment_with_progress(verbose: bool = False) -> Dict[str, Any]:
         sys_to_install, sys_to_upgrade = _apt_check_packages(
             _SETUP_SYSTEM_PACKAGES,
             progress_step=1,
-            step_bars=step_bars,
-            verbose=verbose
+            step_bars=step_bars
         )
     
     _update_progress_widget("Checking system dependencies...", 1, 5, 'complete', 100, step_labels, step_bars)
@@ -2045,16 +2192,16 @@ def setup_environment_with_progress(verbose: bool = False) -> Dict[str, Any]:
     # Step 2: Install system dependencies
     _update_progress_widget("Installing system dependencies...", 2, 5, 'active', 0, step_labels, step_bars)
     if sys_to_install or sys_to_upgrade:
-        _apt_install_packages(sys_to_install, sys_to_upgrade, progress_step=2, step_bars=step_bars, verbose=verbose)
+        _apt_install_packages(sys_to_install, sys_to_upgrade, progress_step=2, step_bars=step_bars)
     else:
-        _log_setup("All system packages are up to date", 'success', verbose)
+        log_setup("All system packages are up to date", 'success', verbose)
         _update_progress_bar_only(2, 100, step_bars)
     
     _update_progress_widget("Installing system dependencies...", 2, 5, 'complete', 100, step_labels, step_bars)
     
     # Step 3: Check Python dependencies (includes torch/torchvision/torchaudio)
     _update_progress_widget("Checking Python dependencies...", 3, 5, 'active', 0, step_labels, step_bars)
-    _log_setup(f"Checking {len(_SETUP_PYTHON_PACKAGES)} Python packages...", 'important', verbose)
+    log_setup(f"Checking {len(_SETUP_PYTHON_PACKAGES)} Python packages...", 'important', verbose)
     _update_progress_widget("Checking Python dependencies...", 3, 5, 'complete', 100, step_labels, step_bars)
     
     # Step 4: Install Python dependencies (includes torch/torchvision/torchaudio)
@@ -2065,13 +2212,12 @@ def setup_environment_with_progress(verbose: bool = False) -> Dict[str, Any]:
         progress_step=4,
         step_labels=step_labels,
         step_bars=step_bars,
-        substeps_container=substeps_container,
-        verbose=verbose
+        substeps_container=substeps_container
     )
     if packages_installed:
-        _log_setup("Python package installation/update completed", 'success', verbose)
+        log_setup("Python package installation/update completed", 'success', verbose)
     else:
-        _log_setup("Python package check completed (no changes needed)", 'success', verbose)
+        log_setup("Python package check completed (no changes needed)", 'success', verbose)
     _update_progress_widget("Installing Python dependencies...", 4, 5, 'complete', 100, step_labels, step_bars)
     
     # Step 5: Finalize setup (GPU check, dependency table, restart detection)
@@ -2082,8 +2228,7 @@ def setup_environment_with_progress(verbose: bool = False) -> Dict[str, Any]:
         progress_step=5,
         step_labels=step_labels,
         step_bars=step_bars,
-        progress_container=progress_container,
-        verbose=verbose
+        progress_container=progress_container
     )
     
     return result

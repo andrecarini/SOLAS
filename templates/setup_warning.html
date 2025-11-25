@@ -1,0 +1,35 @@
+<!--
+Template: setup_warning.html
+Purpose: Warning message when setup has not been completed
+Usage: Load with load_template('setup_warning.html')
+Variables: None (static template)
+-->
+
+<div style="background: color-mix(in srgb, var(--color-error) 20%, var(--color-bg-primary)); 
+            border-left: 4px solid var(--color-error); 
+            padding: 15px; 
+            margin-top: 15px; 
+            border-radius: 8px;">
+    <p style="color: var(--color-error); margin: 0 0 10px 0; font-weight: 600; font-size: 16px;">
+        ⚠ Setup Not Completed
+    </p>
+    <p style="color: var(--color-text-primary); margin: 0 0 10px 0; font-size: 14px;">
+        The <strong>Setup Environment</strong> cell (Cell 1) must be run first before proceeding.
+    </p>
+    <ol style="color: var(--color-text-primary); margin: 0 0 10px 0; padding-left: 20px; font-size: 14px;">
+        <li style="margin-bottom: 5px;">
+            <strong>Go to Cell 1</strong> (Setup Environment) and run it
+        </li>
+        <li style="margin-bottom: 5px;">
+            <strong>Wait for setup to complete</strong> (all dependencies will be installed)
+        </li>
+        <li style="margin-bottom: 5px;">
+            <strong>Then return to this cell</strong> and run it again
+        </li>
+    </ol>
+    <p style="color: var(--color-text-primary); margin: 0; font-size: 13px; font-style: italic;">
+        The setup cell installs all required dependencies and configures the environment. 
+        After it completes successfully, you can proceed with the other cells in order.
+    </p>
+</div>
+

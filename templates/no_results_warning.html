@@ -1,0 +1,21 @@
+<!--
+Template: no_results_warning.html
+Purpose: Warning message when pipeline results are not available
+Usage: Load with load_template('no_results_warning.html')
+Variables: None (static template)
+-->
+
+<div style="background: color-mix(in srgb, var(--color-warning) 20%, var(--color-bg-primary)); 
+            border-left: 4px solid var(--color-warning); 
+            padding: 15px; 
+            margin: 15px 0; 
+            border-radius: 8px;">
+    <p style="color: var(--color-warning); margin: 0; font-weight: 600;">
+        ⚠ No Results Found
+    </p>
+    <p style="color: var(--color-text-primary); margin: 5px 0 0 0; font-size: 14px;">
+        Please run the <strong>Run Pipeline</strong> cell first to generate results.
+        If you have results stored in a variable, assign it to <code>results</code> and run this cell again.
+    </p>
+</div>
+

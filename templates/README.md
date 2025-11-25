@@ -72,6 +72,11 @@ display(HTML(html))
 - **Variables**: None (static template)
 - **Usage**: Display at the start of the Upload Input Audio cell
 
+### `host_voice_selection_ready.html`
+- **Purpose**: Info message shown before host voice selection interface
+- **Variables**: None (static template)
+- **Usage**: Display at the start of the Upload Host Voices cell
+
 ### `success_message.html`
 - **Purpose**: Success message when setup completes
 - **Variables**: None (static template)
@@ -101,6 +106,22 @@ display(HTML(html))
   - `output_directory`: Output directory path
   - `file_links_html`: HTML string with file download links
 - **Usage**: Display comprehensive pipeline results
+
+### `pipeline_start.html`
+- **Purpose**: Information message shown before pipeline execution
+- **Variables**: None (static template)
+- **Usage**: Display at the start of the Run Pipeline cell
+
+### `pipeline_config.html`
+- **Purpose**: Display pipeline configuration in a formatted way
+- **Variables**:
+  - `config_html`: HTML string with formatted configuration details
+- **Usage**: Display pipeline configuration before execution
+
+### `no_results_warning.html`
+- **Purpose**: Warning message when pipeline results are not available
+- **Variables**: None (static template)
+- **Usage**: Display when user tries to view results before running the pipeline
 
 ## Variable Substitution
 

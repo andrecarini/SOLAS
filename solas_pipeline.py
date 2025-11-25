@@ -117,6 +117,41 @@ def show_config_warning() -> None:
     raise StopExecution
 
 
+def show_pipeline_warning() -> None:
+    """
+    Display pipeline warning and halt notebook execution.
+    
+    This function loads the pipeline warning template, displays it, logs debug
+    messages, and raises a StopExecution exception to halt notebook execution.
+    The user must run the Run Pipeline cell (Cell 5) first.
+    
+    Raises:
+        StopExecution: Always raises this exception to halt execution
+    """
+    verbose = get_verbosity()
+    log_setup("Pipeline not completed - user must run Run Pipeline cell first", 'error', verbose)
+    
+    try:
+        from IPython.display import display, HTML
+        # Load and display pipeline warning template
+        warning_html = load_template('no_results_warning.html')
+        display(HTML(warning_html))
+        log_setup("Pipeline warning displayed", 'info', verbose)
+    except (ImportError, NameError, FileNotFoundError, Exception) as e:
+        # If template loading fails, log error but still halt execution
+        log_setup(f"Could not display pipeline warning: {e}", 'error', verbose)
+        log_setup("Please run the Run Pipeline cell (Cell 5) first", 'error', verbose)
+    
+    # Halt execution with custom exception that suppresses traceback
+    class StopExecution(Exception):
+        """Custom exception to halt notebook execution without showing traceback."""
+        def _render_traceback_(self):
+            pass
+    
+    log_setup("Halting execution - pipeline execution required", 'important', verbose)
+    raise StopExecution
+
+
 # ============================================================================
 # Environment Detection Functions
 # ============================================================================
@@ -2461,22 +2496,37 @@ def create_config_widgets():
             description='Target Lang:'
         ),
         "input_audio_text": widgets.Text(
-            value="/content/SOLAS/input_audio_samples/short.wav",
+            value="",  # Will be set dynamically below
             description='Audio Path:'
         ),
         "output_dir_text": widgets.Text(
-            value="/content/solas_outputs",
+            value="",  # Will be set dynamically below
             description='Output Dir:'
         ),
         "host_a_text": widgets.Text(
-            value="/content/SOLAS/TTS_voice_samples/male.wav",
+            value="",  # Will be set dynamically below
             description='Host A Voice:'
         ),
         "host_b_text": widgets.Text(
-            value="/content/SOLAS/TTS_voice_samples/female.wav",
+            value="",  # Will be set dynamically below
             description='Host B Voice:'
         ),
     }
+    
+    # Set default paths dynamically based on environment
+    from pathlib import Path
+    BASE_DIR = Path('/content') if Path('/content').exists() else Path.cwd()
+    SOLAS_DIR = BASE_DIR / 'SOLAS'
+    
+    # Set default input audio to short sample
+    widgets_dict["input_audio_text"].value = str(SOLAS_DIR / 'input_audio_samples' / 'short.wav')
+    
+    # Set default output directory
+    widgets_dict["output_dir_text"].value = str(BASE_DIR / 'solas_outputs')
+    
+    # Set default host voices to sample voices
+    widgets_dict["host_a_text"].value = str(SOLAS_DIR / 'TTS_voice_samples' / 'male.wav')
+    widgets_dict["host_b_text"].value = str(SOLAS_DIR / 'TTS_voice_samples' / 'female.wav')
     
     # Create config box
     config_box = widgets.VBox([

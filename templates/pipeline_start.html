@@ -1,0 +1,30 @@
+<!--
+Template: pipeline_start.html
+Purpose: Information message shown before pipeline execution
+Usage: Load with load_template('pipeline_start.html')
+Variables: None (static template)
+-->
+
+<div style="background: color-mix(in srgb, var(--color-primary) 15%, var(--color-bg-primary)); 
+            border-left: 4px solid var(--color-primary); 
+            padding: 20px; 
+            margin: 20px 0; 
+            border-radius: 8px;">
+    <h3 style="color: var(--color-primary); margin: 0 0 15px 0; font-size: 18px;">
+        🚀 Running SOLAS Pipeline
+    </h3>
+    <p style="color: var(--color-text-primary); margin: 0 0 10px 0; font-size: 14px;">
+        The pipeline will execute the following stages:
+    </p>
+    <ol style="color: var(--color-text-primary); margin: 10px 0; padding-left: 25px; font-size: 14px;">
+        <li style="margin: 5px 0;"><strong>Transcribe</strong> the audio (ASR)</li>
+        <li style="margin: 5px 0;"><strong>Translate</strong> the transcript</li>
+        <li style="margin: 5px 0;"><strong>Generate</strong> key points summary</li>
+        <li style="margin: 5px 0;"><strong>Create</strong> podcast script</li>
+        <li style="margin: 5px 0;"><strong>Synthesize</strong> podcast audio (TTS)</li>
+    </ol>
+    <p style="color: var(--color-text-secondary); margin: 15px 0 0 0; font-size: 13px; font-style: italic;">
+        ⏱️ This may take several minutes depending on audio length and model sizes.
+    </p>
+</div>
+

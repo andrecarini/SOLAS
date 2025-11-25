@@ -731,19 +731,26 @@ def translate_transcript(transcript: str, config: Dict[str, Any]) -> str:
     tokenizer, model = ensure_llm(llm_model_id, quantization)
     
     chunks = chunk_text(transcript, chunk_size_chars)
-    print(f"[Translation] Processing {len(chunks)} chunk(s)...")
+    verbose = get_verbosity()
+    log_setup(f"Processing {len(chunks)} chunk(s)...", 'info', verbose)
     translated_parts = []
-    
-    gen_kwargs = {
-        "max_new_tokens": max_new_tokens,
-        "do_sample": False,
-        "pad_token_id": tokenizer.eos_token_id,
-        "eos_token_id": tokenizer.eos_token_id,
-    }
     
     for i, chunk in enumerate(chunks, 1):
         if len(chunks) > 1:
-            print(f"[Translation] Processing chunk {i}/{len(chunks)}...")
+            log_setup(f"Processing chunk {i}/{len(chunks)}...", 'info', verbose)
+        
+        # Calculate dynamic max_new_tokens based on input length
+        # Translation can be up to 1.5x longer than original, so ensure we have enough tokens
+        chunk_tokens = len(tokenizer.encode(chunk, add_special_tokens=False))
+        # Use at least max_new_tokens, but scale up if chunk is large
+        dynamic_max_tokens = max(max_new_tokens, int(chunk_tokens * 1.5))
+        
+        gen_kwargs = {
+            "max_new_tokens": dynamic_max_tokens,
+            "do_sample": False,
+            "pad_token_id": tokenizer.eos_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+        }
         system_prompt = (
             f"You are a professional technical translator. Translate the provided transcript into {target_language}. "
             "Be faithful, precise, and complete. Preserve technical terms whenever possible. "
@@ -784,6 +791,9 @@ def translate_transcript(transcript: str, config: Dict[str, Any]) -> str:
         
         gen_only = output_ids[0, input_ids.shape[1]:]
         translated = tokenizer.decode(gen_only, skip_special_tokens=True).strip()
+        
+        # Debug logging to check if translation is complete
+        log_setup(f"Chunk {i}: Input {len(chunk)} chars ({chunk_tokens} tokens), Output {len(translated)} chars", 'info', verbose)
         translated_parts.append(translated)
     
     return "\n".join(translated_parts).strip()
@@ -813,15 +823,23 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
     partial_bullets = []
     
     # Chunk-level generation kwargs
+    from transformers import GenerationConfig
     if summary_mode == "sampled":
         gen_chunk_kwargs = {
             "max_new_tokens": max_new_tokens,
             "do_sample": True,
-            "temperature": 0.2,
-            "top_p": 0.9,
             "pad_token_id": tokenizer.eos_token_id,
             "eos_token_id": tokenizer.eos_token_id,
         }
+        # Use GenerationConfig for sampling parameters to avoid warnings
+        gen_config = GenerationConfig(
+            do_sample=True,
+            temperature=0.2,
+            top_p=0.9,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+        gen_chunk_kwargs["generation_config"] = gen_config
     else:
         gen_chunk_kwargs = {
             "max_new_tokens": max_new_tokens,
@@ -839,7 +857,10 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
             "eos_token_id": tokenizer.eos_token_id,
         }
     else:
-        gen_agg_kwargs = gen_chunk_kwargs
+        # Make a copy to avoid modifying the original
+        gen_agg_kwargs = gen_chunk_kwargs.copy()
+        if "generation_config" in gen_agg_kwargs:
+            gen_agg_kwargs["generation_config"] = gen_chunk_kwargs["generation_config"]
     
     chunk_prompt_header = (
         "Extract ONLY the most important key points from the transcript segment below. "
@@ -919,6 +940,7 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
         )
         input_ids = tokenizer(fallback_prompt, return_tensors="pt").input_ids
     
+    import torch
     model_device = next(model.parameters()).device
     input_ids = input_ids.to(model_device)
     attention_mask = torch.ones_like(input_ids, dtype=torch.long, device=input_ids.device)
@@ -1172,11 +1194,12 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
         - file_paths: Paths to saved files
         - performance_metrics: Timing and resource usage for each stage
     """
+    verbose = get_verbosity()
     pipeline_start_time = time.time()
     performance_metrics = {}
     
     # Stage 1: Load and preprocess audio
-    print("\n[Pipeline] Stage 1/6: Loading and preprocessing audio...")
+    log_setup("Stage 1/6: Loading and preprocessing audio...", 'info', verbose)
     if progress_callback:
         progress_callback(1, "Loading and preprocessing audio", 0)
     stage_start = time.time()
@@ -1184,10 +1207,10 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     performance_metrics["audio_preprocessing"] = _collect_performance_metrics("audio_preprocessing", stage_start)
     if progress_callback:
         progress_callback(1, "Loading and preprocessing audio", 100)
-    print(f"[Pipeline] ✓ Stage 1 complete ({performance_metrics['audio_preprocessing']['time_seconds']:.2f}s)")
+    log_setup(f"✓ Stage 1 complete ({performance_metrics['audio_preprocessing']['time_seconds']:.2f}s)", 'success', verbose)
     
     # Stage 2: ASR transcription
-    print("[Pipeline] Stage 2/6: Transcribing audio (ASR)...")
+    log_setup("Stage 2/6: Transcribing audio (ASR)...", 'info', verbose)
     if progress_callback:
         progress_callback(2, "Transcribing audio (ASR)", 0)
     stage_start = time.time()
@@ -1195,11 +1218,11 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     performance_metrics["asr"] = _collect_performance_metrics("asr", stage_start)
     if progress_callback:
         progress_callback(2, "Transcribing audio (ASR)", 100)
-    print(f"[Pipeline] ✓ Stage 2 complete ({performance_metrics['asr']['time_seconds']:.2f}s)")
-    print(f"[Pipeline] Transcript length: {len(original_transcript)} characters")
+    log_setup(f"✓ Stage 2 complete ({performance_metrics['asr']['time_seconds']:.2f}s)", 'success', verbose)
+    log_setup(f"Transcript length: {len(original_transcript)} characters", 'info', verbose)
     
     # Stage 3: Translation
-    print("[Pipeline] Stage 3/6: Translating transcript...")
+    log_setup("Stage 3/6: Translating transcript...", 'info', verbose)
     if progress_callback:
         progress_callback(3, "Translating transcript", 0)
     stage_start = time.time()
@@ -1207,10 +1230,10 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     performance_metrics["translation"] = _collect_performance_metrics("translation", stage_start)
     if progress_callback:
         progress_callback(3, "Translating transcript", 100)
-    print(f"[Pipeline] ✓ Stage 3 complete ({performance_metrics['translation']['time_seconds']:.2f}s)")
+    log_setup(f"✓ Stage 3 complete ({performance_metrics['translation']['time_seconds']:.2f}s)", 'success', verbose)
     
     # Stage 4: Summarization
-    print("[Pipeline] Stage 4/6: Generating key points summary...")
+    log_setup("Stage 4/6: Generating key points summary...", 'info', verbose)
     if progress_callback:
         progress_callback(4, "Generating key points summary", 0)
     stage_start = time.time()
@@ -1218,10 +1241,10 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     performance_metrics["summary"] = _collect_performance_metrics("summary", stage_start)
     if progress_callback:
         progress_callback(4, "Generating key points summary", 100)
-    print(f"[Pipeline] ✓ Stage 4 complete ({performance_metrics['summary']['time_seconds']:.2f}s)")
+    log_setup(f"✓ Stage 4 complete ({performance_metrics['summary']['time_seconds']:.2f}s)", 'success', verbose)
     
     # Stage 5: Podcast script generation
-    print("[Pipeline] Stage 5/6: Generating podcast script...")
+    log_setup("Stage 5/6: Generating podcast script...", 'info', verbose)
     if progress_callback:
         progress_callback(5, "Generating podcast script", 0)
     stage_start = time.time()
@@ -1229,10 +1252,10 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     performance_metrics["podcast_script"] = _collect_performance_metrics("podcast_script", stage_start)
     if progress_callback:
         progress_callback(5, "Generating podcast script", 100)
-    print(f"[Pipeline] ✓ Stage 5 complete ({performance_metrics['podcast_script']['time_seconds']:.2f}s)")
+    log_setup(f"✓ Stage 5 complete ({performance_metrics['podcast_script']['time_seconds']:.2f}s)", 'success', verbose)
     
     # Stage 6: TTS synthesis
-    print("[Pipeline] Stage 6/6: Synthesizing podcast audio (TTS)...")
+    log_setup("Stage 6/6: Synthesizing podcast audio (TTS)...", 'info', verbose)
     if progress_callback:
         progress_callback(6, "Synthesizing podcast audio (TTS)", 0)
     stage_start = time.time()
@@ -1253,13 +1276,13 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
         tts_metrics["real_time_factor"] = 0.0
     
     performance_metrics["tts"] = tts_metrics
-    print(f"[Pipeline] ✓ Stage 6 complete ({tts_metrics['time_seconds']:.2f}s)")
+    log_setup(f"✓ Stage 6 complete ({tts_metrics['time_seconds']:.2f}s)", 'success', verbose)
     
     # Total runtime
     performance_metrics["total_runtime_seconds"] = time.time() - pipeline_start_time
     
     # Save text artifacts to files
-    print("[Pipeline] Saving output files...")
+    log_setup("Saving output files...", 'info', verbose)
     output_dir = Path(config.get("output_directory", "/content/solas_outputs"))
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -1276,8 +1299,8 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(podcast_script)
     
-    print(f"[Pipeline] ✓ Pipeline complete! Total time: {performance_metrics['total_runtime_seconds']:.2f}s")
-    print(f"[Pipeline] Output directory: {output_dir}")
+    log_setup(f"✓ Pipeline complete! Total time: {performance_metrics['total_runtime_seconds']:.2f}s", 'success', verbose)
+    log_setup(f"Output directory: {output_dir}", 'info', verbose)
     
     return {
         "text_outputs": {
@@ -1291,6 +1314,7 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
             "key_points_summary": summary_path,
             "podcast_script": script_path,
             "final_podcast_audio": podcast_audio_path,
+            "output_directory": str(output_dir),
         },
         "performance_metrics": performance_metrics,
     }
@@ -2135,7 +2159,16 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
         error_html=error_html
     )
     
-    # Update progress container with final HTML
+    # Display HTML directly to ensure it's visible
+    if HTML is not None:
+        try:
+            from IPython.display import display
+            display(HTML(setup_html))
+            log_setup("Setup completion HTML displayed", 'info', verbose)
+        except (ImportError, Exception) as e:
+            log_setup(f"Could not display setup HTML: {e}", 'warning', verbose)
+    
+    # Update progress container with final HTML (for widget-based display)
     if progress_container is not None and widgets is not None and HTML is not None:
         children_list = [widgets.HTML(setup_html)]
         progress_container.children = children_list
@@ -2528,7 +2561,7 @@ def create_config_widgets():
     widgets_dict["host_a_text"].value = str(SOLAS_DIR / 'TTS_voice_samples' / 'male.wav')
     widgets_dict["host_b_text"].value = str(SOLAS_DIR / 'TTS_voice_samples' / 'female.wav')
     
-    # Create config box
+    # Create config box with proper layout
     config_box = widgets.VBox([
         widgets.HTML('<h3>SOLAS Configuration</h3>'),
         widgets.HTML('<b>Models</b>'),
@@ -2542,7 +2575,12 @@ def create_config_widgets():
         widgets.HTML('<b>Languages</b>'),
         widgets_dict["source_lang_dropdown"],
         widgets_dict["target_lang_dropdown"],
-    ])
+    ], layout=widgets.Layout(
+        border='1px solid #dadce0',
+        padding='10px',
+        margin='10px 0',
+        width='auto'
+    ))
     
     widgets_dict["config_box"] = config_box
     

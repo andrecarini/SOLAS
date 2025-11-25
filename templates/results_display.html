@@ -139,7 +139,7 @@ h2::before {
 }
 .stage-metrics {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 12px;
 }
 .stage-card {
@@ -209,17 +209,17 @@ h2::before {
         <div class="metrics-grid">
             <div class="metric-card">
                 <h4>Total Runtime</h4>
-                <div class="metric-value">{total_runtime:.2f}s</div>
+                <div class="metric-value">{total_runtime}</div>
                 <div class="metric-label">Complete Pipeline</div>
             </div>
             <div class="metric-card">
                 <h4>Audio Duration</h4>
-                <div class="metric-value">{audio_duration:.1f}s</div>
+                <div class="metric-value">{audio_duration}</div>
                 <div class="metric-label">Podcast Length</div>
             </div>
             <div class="metric-card">
                 <h4>Real-Time Factor</h4>
-                <div class="metric-value">{real_time_factor:.2f}x</div>
+                <div class="metric-value">{real_time_factor}</div>
                 <div class="metric-label">TTS Speed</div>
             </div>
         </div>

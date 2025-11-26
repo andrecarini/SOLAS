@@ -7,6 +7,7 @@ Variables:
   - audio_duration: Podcast audio duration in seconds (float)
   - real_time_factor: TTS real-time factor (float)
   - stage_metrics_html: HTML string with stage-by-stage metrics
+  - original_transcript: Original ASR transcript text
   - translated_transcript: Translated transcript text
   - key_points_summary: Key points summary text
   - podcast_script: Podcast script text
@@ -234,7 +235,12 @@ h2::before {
     </div>
     
     <div class="section">
-        <h2>📝 Translated Transcript</h2>
+        <h2>📝 Original Transcript</h2>
+        <div class="text-content">{original_transcript}</div>
+    </div>
+    
+    <div class="section">
+        <h2>🌐 Translated Transcript</h2>
         <div class="text-content">{translated_transcript}</div>
     </div>
     
@@ -252,6 +258,7 @@ h2::before {
         <h2>🎵 Podcast Audio</h2>
         <div class="audio-player">
             <p><strong>Listen to the generated podcast:</strong></p>
+            {audio_player_html}
         </div>
     </div>
     

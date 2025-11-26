@@ -5,6 +5,33 @@ Usage: Load with load_template('host_voice_selection_ready.html')
 Variables: None (static template)
 -->
 
+<style>
+/* Light theme (default) */
+:root {
+    --color-info: #1a73e8;
+    --color-text-primary: #202124;
+    --color-bg-primary: #ffffff;
+}
+
+/* Colab dark theme detection */
+[theme="dark"] :root,
+.theme-dark :root,
+html[theme="dark"] :root {
+    --color-info: #8ab4f8;
+    --color-text-primary: #e8eaed;
+    --color-bg-primary: #202124;
+}
+
+/* Fallback to prefers-color-scheme if Colab theme not detected */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --color-info: #8ab4f8;
+        --color-text-primary: #e8eaed;
+        --color-bg-primary: #202124;
+    }
+}
+</style>
+
 <div style="background: color-mix(in srgb, var(--color-info) 20%, var(--color-bg-primary)); 
             border-left: 4px solid var(--color-info); 
             padding: 15px; 

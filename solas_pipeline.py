@@ -32,6 +32,14 @@ import time
 import gc
 import warnings
 import subprocess
+
+# Suppress torch_dtype deprecation warnings in non-debug mode
+def _suppress_torch_dtype_warnings():
+    """Suppress torch_dtype deprecation warnings unless in debug mode."""
+    verbose = get_verbosity()
+    if not verbose:
+        warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*", category=FutureWarning)
+        warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*", category=UserWarning)
 import shutil
 import platform
 import importlib.metadata
@@ -355,6 +363,7 @@ def ensure_llm(model_id: str, quantization: Optional[str] = None) -> Tuple[Any, 
     device_map = "auto" if torch.cuda.is_available() else None
     
     verbose = get_verbosity()
+    _suppress_torch_dtype_warnings()  # Suppress deprecation warning in non-debug mode
     log_setup(f"[LLM] Loading tokenizer for {model_id}...", 'info', verbose)
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
     log_setup("[LLM] Tokenizer loaded.", 'info', verbose)
@@ -367,7 +376,7 @@ def ensure_llm(model_id: str, quantization: Optional[str] = None) -> Tuple[Any, 
             model_id,
             quantization_config=quant_cfg,
             device_map=device_map,
-            torch_dtype=compute_dtype,
+            dtype=compute_dtype,
             low_cpu_mem_usage=True,
             use_safetensors=True,
         )
@@ -388,7 +397,7 @@ def ensure_llm(model_id: str, quantization: Optional[str] = None) -> Tuple[Any, 
                     model_id,
                     quantization_config=quant_cfg,
                     device_map=device_map,
-                    torch_dtype=compute_dtype,
+                    dtype=compute_dtype,
                     low_cpu_mem_usage=True,
                     use_safetensors=True,
                 )
@@ -566,10 +575,11 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
         source_language = lang_name_to_code.get(source_language, source_language)
     
     verbose = get_verbosity()
+    _suppress_torch_dtype_warnings()  # Suppress deprecation warning in non-debug mode
     log_setup(f"[ASR] Loading model: {asr_model_id}...", 'info', verbose)
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         asr_model_id,
-        torch_dtype=dtype,
+        dtype=dtype,
         low_cpu_mem_usage=True,
         use_safetensors=True,
     )
@@ -1065,9 +1075,14 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
     # Automatically accept Coqui TTS terms of service to avoid interactive prompt
     os.environ["COQUI_TOS_AGREED"] = "1"
     
-    # Suppress jieba SyntaxWarnings (invalid escape sequences in regex patterns)
-    import warnings
-    warnings.filterwarnings("ignore", category=SyntaxWarning, module="jieba")
+    # Suppress jieba SyntaxWarnings (invalid escape sequences in regex patterns) in non-debug mode
+    verbose = get_verbosity()
+    if not verbose:
+        warnings.filterwarnings("ignore", category=SyntaxWarning, module="jieba")
+    
+    # Suppress Hugging Face Hub download progress bars in non-debug mode
+    if not verbose:
+        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     
     # Install torchcodec if not available (required by torchaudio for some audio loading operations)
     verbose = get_verbosity()
@@ -1259,9 +1274,13 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     output_dir = Path(config.get("output_directory", "/content/solas_outputs"))
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    original_path = str(output_dir / "original_transcript.txt")
     translated_path = str(output_dir / "translated_transcript.txt")
     summary_path = str(output_dir / "key_points.md")
     script_path = str(output_dir / "podcast_script.txt")
+    
+    with open(original_path, "w", encoding="utf-8") as f:
+        f.write(original_transcript)
     
     with open(translated_path, "w", encoding="utf-8") as f:
         f.write(translated_transcript)
@@ -1283,6 +1302,7 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
             "podcast_script": podcast_script,
         },
         "file_paths": {
+            "original_transcript": original_path,
             "translated_transcript": translated_path,
             "key_points_summary": summary_path,
             "podcast_script": script_path,
@@ -2619,6 +2639,8 @@ def display_results(results):
     """
     Display pipeline results in a user-friendly format using HTML.
     
+    In non-debug mode, shows only a success banner. In debug mode, shows full details.
+    
     Args:
         results: Dictionary returned from run_pipeline()
     """
@@ -2629,7 +2651,17 @@ def display_results(results):
     # Log to console if verbose
     log_setup("Displaying pipeline results...", 'info', verbose)
     
-    # Display results using HTML template
+    # In non-debug mode, show only success banner
+    if not verbose:
+        try:
+            html = load_template('pipeline_complete.html')
+            display(HTML(html))
+        except Exception as e:
+            log_setup(f"Error displaying success banner: {e}", 'error', True)  # Always log errors
+            log_setup("Pipeline completed successfully. Run the View Results cell to see details.", 'success', True)
+        return
+    
+    # Debug mode: Display full results using HTML template
     try:
         metrics = results["performance_metrics"]
         

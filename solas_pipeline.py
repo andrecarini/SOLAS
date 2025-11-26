@@ -47,41 +47,6 @@ from functools import lru_cache
 # Setup Completion Check
 # ============================================================================
 
-def show_setup_warning() -> None:
-    """
-    Display setup warning and halt notebook execution.
-    
-    This function loads the setup warning template, displays it, logs debug
-    messages, and raises a StopExecution exception to halt notebook execution.
-    The user must run the Setup Environment cell (Cell 1) first.
-    
-    Raises:
-        StopExecution: Always raises this exception to halt execution
-    """
-    verbose = get_verbosity()
-    log_setup("Setup not completed - user must run Setup Environment cell first", 'error', verbose)
-    
-    try:
-        from IPython.display import display, HTML
-        # Load and display setup warning template
-        warning_html = load_template('setup_warning.html')
-        display(HTML(warning_html))
-        log_setup("Setup warning displayed", 'info', verbose)
-    except (ImportError, NameError, FileNotFoundError, Exception) as e:
-        # If template loading fails, log error but still halt execution
-        log_setup(f"Could not display setup warning: {e}", 'error', verbose)
-        log_setup("Please run the Setup Environment cell (Cell 1) first", 'error', verbose)
-    
-    # Halt execution with custom exception that suppresses traceback
-    class StopExecution(Exception):
-        """Custom exception to halt notebook execution without showing traceback."""
-        def _render_traceback_(self):
-            pass
-    
-    log_setup("Halting execution - setup required", 'important', verbose)
-    raise StopExecution
-
-
 def show_config_warning() -> None:
     """
     Display configuration warning and halt notebook execution.
@@ -307,6 +272,7 @@ def _create_quantization_config(quantization: Optional[str], compute_dtype) -> O
         import bitsandbytes  # noqa: F401
         import importlib.metadata
         from packaging import version as pkg_version
+        from transformers import BitsAndBytesConfig
         
         # Verify bitsandbytes version is >= 0.43.1 (required for 4-bit quantization)
         try:
@@ -388,12 +354,13 @@ def ensure_llm(model_id: str, quantization: Optional[str] = None) -> Tuple[Any, 
     quant_cfg = _create_quantization_config(quantization, compute_dtype)
     device_map = "auto" if torch.cuda.is_available() else None
     
-    print(f"[LLM] Loading tokenizer for {model_id}...")
+    verbose = get_verbosity()
+    log_setup(f"[LLM] Loading tokenizer for {model_id}...", 'info', verbose)
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
-    print("[LLM] Tokenizer loaded.")
+    log_setup("[LLM] Tokenizer loaded.", 'info', verbose)
     
     quant_str = f" ({quantization})" if quantization else ""
-    print(f"[LLM] Loading model{quant_str} (this may take a while for large models)...")
+    log_setup(f"[LLM] Loading model{quant_str} (this may take a while for large models)...", 'info', verbose)
     
     try:
         model = AutoModelForCausalLM.from_pretrained(
@@ -404,13 +371,13 @@ def ensure_llm(model_id: str, quantization: Optional[str] = None) -> Tuple[Any, 
             low_cpu_mem_usage=True,
             use_safetensors=True,
         )
-        print("[LLM] Model loaded.")
+        log_setup("[LLM] Model loaded.", 'success', verbose)
     except ImportError as e:
         if "bitsandbytes" in str(e) and "0.43.1" in str(e):
             # Transformers version check failed - try workaround
-            print("[LLM] WARNING: Transformers version check failed. Attempting workaround...")
-            print("[LLM] This might be a false positive if bitsandbytes 0.48.2 is installed.")
-            print("[LLM] Trying to load without explicit quantization config...")
+            log_setup("[LLM] WARNING: Transformers version check failed. Attempting workaround...", 'warning', verbose)
+            log_setup("[LLM] This might be a false positive if bitsandbytes 0.48.2 is installed.", 'warning', verbose)
+            log_setup("[LLM] Trying to load without explicit quantization config...", 'info', verbose)
             # Try loading without quantization config and let transformers handle it
             try:
                 import bitsandbytes as bnb
@@ -425,7 +392,7 @@ def ensure_llm(model_id: str, quantization: Optional[str] = None) -> Tuple[Any, 
                     low_cpu_mem_usage=True,
                     use_safetensors=True,
                 )
-                print("[LLM] Model loaded (workaround succeeded).")
+                log_setup("[LLM] Model loaded (workaround succeeded).", 'success', verbose)
             except Exception as e2:
                 raise ImportError(
                     f"Failed to load model with 4-bit quantization: {e}\n"
@@ -598,7 +565,8 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
         }
         source_language = lang_name_to_code.get(source_language, source_language)
     
-    print(f"[ASR] Loading model: {asr_model_id}...")
+    verbose = get_verbosity()
+    log_setup(f"[ASR] Loading model: {asr_model_id}...", 'info', verbose)
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         asr_model_id,
         torch_dtype=dtype,
@@ -610,7 +578,7 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
     # Move model to device
     model_device = torch.device(device)
     model = model.to(model_device)
-    print(f"[ASR] Model loaded on {device}.")
+    log_setup(f"[ASR] Model loaded on {device}.", 'info', verbose)
     
     # Process audio
     audio_np = audio_tensor.squeeze(0).cpu().numpy().astype(np.float32)
@@ -648,7 +616,7 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
     audio_duration_seconds = audio_np.shape[0] / sample_rate
     
     # Generate transcription using model's own chunking mechanism
-    print(f"[ASR] Transcribing audio ({audio_duration_seconds:.1f}s duration)...")
+    log_setup(f"[ASR] Transcribing audio ({audio_duration_seconds:.1f}s duration)...", 'info', verbose)
     
     # Create progress indicator
     # Whisper typically processes at ~10-30x real-time, so estimate total time
@@ -698,7 +666,7 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
     transcript = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
     actual_time = time.time() - start_time
     speed_factor = audio_duration_seconds / actual_time if actual_time > 0 else 0
-    print(f"[ASR] Transcription complete. ({actual_time:.1f}s, {speed_factor:.1f}x real-time)")
+    log_setup(f"[ASR] Transcription complete ({actual_time:.1f}s, {speed_factor:.1f}x real-time)", 'success', verbose)
     
     # Cleanup
     import torch
@@ -727,7 +695,8 @@ def translate_transcript(transcript: str, config: Dict[str, Any]) -> str:
     target_language = config.get("target_language", "Portuguese")
     max_new_tokens = config.get("translation_max_new_tokens", 1024)
     
-    print(f"[Translation] Loading LLM: {llm_model_id}...")
+    verbose = get_verbosity()
+    log_setup(f"[Translation] Loading LLM: {llm_model_id}...", 'info', verbose)
     tokenizer, model = ensure_llm(llm_model_id, quantization)
     
     chunks = chunk_text(transcript, chunk_size_chars)
@@ -816,7 +785,8 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
     summary_mode = config.get("summary_mode", "greedy")
     max_new_tokens = config.get("summary_max_new_tokens", 512)
     
-    print(f"[Summary] Loading LLM: {llm_model_id}...")
+    verbose = get_verbosity()
+    log_setup(f"[Summary] Loading LLM: {llm_model_id}...", 'info', verbose)
     tokenizer, model = ensure_llm(llm_model_id, quantization)
     
     chunks = chunk_text(translated_text, chunk_size_chars)
@@ -987,7 +957,8 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
     max_new_tokens = config.get("podcast_max_new_tokens", 1024)
     target_language = config.get("target_language", "Portuguese")
     
-    print(f"[Podcast Script] Loading LLM: {llm_model_id}...")
+    verbose = get_verbosity()
+    log_setup(f"[Podcast Script] Loading LLM: {llm_model_id}...", 'info', verbose)
     tokenizer, model = ensure_llm(llm_model_id, quantization)
     
     combined = translated_text.strip()
@@ -1099,6 +1070,8 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
     warnings.filterwarnings("ignore", category=SyntaxWarning, module="jieba")
     
     # Install torchcodec if not available (required by torchaudio for some audio loading operations)
+    verbose = get_verbosity()
+    
     # torchcodec is needed when torchaudio tries to use it as a backend
     try:
         import torchcodec
@@ -1106,7 +1079,7 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
         try:
             import subprocess
             import sys
-            print("[TTS] Installing torchcodec (required for audio loading)...")
+            log_setup("[TTS] Installing torchcodec (required for audio loading)...", 'info', verbose)
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "torchcodec", "-q"],
                 capture_output=True,
@@ -1115,15 +1088,15 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
             )
             if result.returncode == 0:
                 import torchcodec
-                print("[TTS] ✓ torchcodec installed successfully")
+                log_setup("[TTS] ✓ torchcodec installed successfully", 'success', verbose)
             else:
-                print(f"[TTS] ⚠ Could not install torchcodec: {result.stderr}")
-                print("[TTS] Attempting to continue with soundfile backend...")
+                log_setup(f"[TTS] ⚠ Could not install torchcodec: {result.stderr}", 'warning', verbose)
+                log_setup("[TTS] Attempting to continue with soundfile backend...", 'info', verbose)
         except subprocess.TimeoutExpired:
-            print("[TTS] ⚠ torchcodec installation timed out")
+            log_setup("[TTS] ⚠ torchcodec installation timed out", 'warning', verbose)
         except Exception as e:
-            print(f"[TTS] ⚠ Could not install torchcodec: {e}")
-            print("[TTS] Attempting to continue with soundfile backend...")
+            log_setup(f"[TTS] ⚠ Could not install torchcodec: {e}", 'warning', verbose)
+            log_setup("[TTS] Attempting to continue with soundfile backend...", 'info', verbose)
     
     # Lazy import TTS - only import when this function is called
     from TTS.api import TTS as COQUI_TTS
@@ -1780,9 +1753,7 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
             if progress_step is not None and step_bars is not None:
                 _update_progress_bar_only(progress_step, 10, step_bars)
             
-            if verbose:
-                print(f"[SOLAS] Executing: {' '.join(cmd)}")
-                sys.stdout.flush()
+            log_setup(f"Executing: {' '.join(cmd)}", 'info', verbose)
             
             # Run pip with output capture for progress tracking
             process = subprocess.Popen(
@@ -1800,9 +1771,7 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
             seen_uninstalling = False
             seen_installing = False
             
-            if verbose:
-                print(f"[SOLAS] VERBOSE MODE: Streaming pip output in real-time...")
-                sys.stdout.flush()
+            log_setup("VERBOSE MODE: Streaming pip output in real-time...", 'info', verbose)
             
             # Stream output line by line and track progress
             for line in process.stdout:
@@ -1854,9 +1823,7 @@ def _pip_install_packages(pkgs: List[str], check_first: bool = True, progress_st
             if progress_step is not None and step_bars is not None:
                 _update_progress_bar_only(progress_step, 100, step_bars)
             
-            if verbose:
-                print(f"\n[SOLAS] Pip command completed with exit code: {returncode}")
-            sys.stdout.flush()
+            log_setup(f"Pip command completed with exit code: {returncode}", 'info', verbose)
             
             if returncode == 0:
                 log_setup(f"Successfully installed packages", 'success', verbose)
@@ -1900,7 +1867,7 @@ def _apt_check_packages(pkgs_with_constraints: List[Tuple[str, Optional[str]]], 
             _update_progress_bar_only(progress_step, 10, step_bars)
         log_setup("Updating package list (this may take a moment)...", 'important', verbose)
         if verbose:
-            print("[SOLAS] Running: apt-get update -y...")
+            log_setup("Running: apt-get update -y...", 'info', verbose)
             subprocess.run(["apt-get", "update", "-y"], check=True)
         else:
             subprocess.run(
@@ -1968,7 +1935,7 @@ def _apt_install_packages(to_install: List[str], to_upgrade: List[str], progress
                 _update_progress_bar_only(progress_step, 10, step_bars)
             log_setup(f"Running apt-get install (this may take a few minutes)...", 'important', verbose)
             if verbose:
-                print(f"[SOLAS] Running: {' '.join(cmd[:5])}...")
+                log_setup(f"Running: {' '.join(cmd[:5])}...", 'info', verbose)
                 subprocess.run(cmd, check=True)
             else:
                 subprocess.run(
@@ -2344,159 +2311,7 @@ def setup_environment_with_progress() -> Dict[str, Any]:
 
 # ============================================================================
 # Interactive Notebook Helper Functions
-# ============================================================================
-
-def setup_environment():
-    """
-    Install dependencies and check GPU availability.
-    Call this once at the start of the interactive notebook.
-    """
-    import sys
-    import subprocess
-    import shutil
-    import platform
-    import os
-    
-    print(f"[SOLAS] Python {sys.version.split()[0]} | Platform: {platform.platform()}")
-    print(f"[SOLAS] CWD: {os.getcwd()}")
-    
-    def pip_install(pkgs):
-        try:
-            print(f"[setup] pip install: {pkgs}")
-            subprocess.run([sys.executable, "-m", "pip", "install", "-q"] + pkgs, check=True)
-            print("[setup] pip install done")
-        except Exception as e:
-            print(f"[setup] pip install failed: {e}")
-    
-    def apt_install(pkgs):
-        try:
-            if shutil.which("apt-get"):
-                print(f"[setup] apt-get install: {pkgs}")
-                subprocess.run(["apt-get", "update", "-y"], check=True, capture_output=True)
-                subprocess.run(["apt-get", "install", "-y"] + pkgs, check=True, capture_output=True)
-                print("[setup] apt-get install done")
-        except Exception as e:
-            print(f"[setup] apt-get failed: {e}")
-    
-    # System deps needed by audio/TTS (Colab)
-    if 'google.colab' in sys.modules:
-        apt_install(["espeak-ng", "libsndfile1", "ffmpeg"])
-    
-    # Install torch/torchaudio appropriately
-    try:
-        import torch, torchaudio  # noqa: F401
-    except Exception:
-        if 'google.colab' in sys.modules:
-            pip_install(["--index-url", "https://download.pytorch.org/whl/cu121", "torch", "torchaudio"])
-        else:
-            pip_install(["torch", "torchaudio"])
-    
-    all_packages = [
-        "transformers==4.56.2",
-        "accelerate==1.10.1",
-        "librosa==0.11.0",
-        "pydub==0.25.1",
-        "SoundFile==0.13.1",
-        "datasets==4.0.0",
-        "sentencepiece==0.2.1",
-        "ipywidgets==7.7.1",
-        "widgetsnbextension==3.6.10",
-        "bitsandbytes>=0.43.1",  # Required for 4-bit quantization
-        "coqui-tts",
-        "tqdm",
-    ]
-    
-    pip_install(all_packages)
-    
-    # Authenticate with Hugging Face if token was provided
-    hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGING_FACE_HUB_TOKEN')
-    if hf_token:
-        try:
-            from huggingface_hub import login
-            login(token=hf_token, add_to_git_credential=False)
-            print("[SOLAS] ✓ Authenticated with Hugging Face Hub")
-        except ImportError:
-            print("[SOLAS] ℹ huggingface_hub not available yet, token will be used when needed")
-        except Exception as e:
-            print(f"[SOLAS] ⚠ Could not authenticate with Hugging Face: {e}")
-            print("[SOLAS] Token is set as environment variable and will be used automatically")
-    else:
-        print("[SOLAS] ℹ No Hugging Face token found (using public access)")
-    
-    # Verify bitsandbytes installation and version
-    bnb_just_installed = False
-    
-    # Check if bitsandbytes was already available before we installed packages
-    bnb_was_available = 'bitsandbytes' in sys.modules
-    
-    try:
-        import bitsandbytes
-        import importlib.metadata
-        from packaging import version as pkg_version
-        bnb_version = importlib.metadata.version("bitsandbytes")
-        print(f"[SOLAS] bitsandbytes version: {bnb_version}")
-        
-        if pkg_version.parse(bnb_version) < pkg_version.parse("0.43.1"):
-            print(f"[SOLAS] WARNING: bitsandbytes version {bnb_version} is too old. Version >= 0.43.1 required.")
-            print("[SOLAS] Attempting to upgrade bitsandbytes...")
-            pip_install(["-U", "bitsandbytes"])
-            bnb_just_installed = True  # Mark as just installed/upgraded
-            # Re-check version after upgrade
-            try:
-                importlib.reload(bitsandbytes)
-                bnb_version = importlib.metadata.version("bitsandbytes")
-                print(f"[SOLAS] bitsandbytes upgraded to version: {bnb_version}")
-            except Exception:
-                print("[SOLAS] WARNING: Could not verify bitsandbytes version after upgrade.")
-        else:
-            print(f"[SOLAS] ✓ bitsandbytes version {bnb_version} is compatible for 4-bit quantization")
-            
-    except ImportError:
-        # bitsandbytes wasn't available, so it was just installed
-        bnb_just_installed = True
-        try:
-            import bitsandbytes
-            import importlib.metadata
-            bnb_version = importlib.metadata.version("bitsandbytes")
-            print(f"[SOLAS] bitsandbytes installed, version: {bnb_version}")
-        except Exception as e:
-            print(f"[SOLAS] WARNING: bitsandbytes installed but could not verify version: {e}")
-    
-    except Exception as e:
-        print(f"[SOLAS] WARNING: Could not verify bitsandbytes installation: {e}")
-        print("[SOLAS] 4-bit quantization may not work. If you need it:")
-        print("[SOLAS]   1. Try: pip install -U bitsandbytes")
-        print("[SOLAS]   2. Restart runtime: Runtime → Restart runtime")
-        print("[SOLAS]   3. Re-run the 'Setup Environment' cell")
-
-    # Important: bitsandbytes requires runtime restart after installation to work with CUDA
-    if bnb_just_installed and not bnb_was_available:
-        print()
-        print("=" * 60)
-        print("⚠️  RUNTIME RESTART REQUIRED")
-        print("=" * 60)
-        print("bitsandbytes was just installed. It requires a runtime restart to properly")
-        print("initialize CUDA bindings. Without restarting, 4-bit quantization will fail.")
-        print()
-        print("Next steps:")
-        print("  1. Click: Runtime → Restart runtime")
-        print("  2. After restart, re-run this 'Setup Environment' cell")
-        print("  3. Then continue with the rest of the notebook cells")
-        print()
-        print("NOTE: Restarting clears Python variables but keeps installed packages.")
-        print("=" * 60)
-        print()
-    
-    # Check GPU availability
-    import torch
-    if torch.cuda.is_available():
-        device_name = torch.cuda.get_device_name(0)
-        print(f"[SOLAS] GPU detected: {device_name}")
-    else:
-        print('WARNING: No GPU detected. This notebook will run extremely slowly without a GPU.')
-
-
-def create_config_widgets():
+# ============================================================================def create_config_widgets():
     """
     Create and return all configuration widgets for the interactive interface.
     
@@ -2801,74 +2616,70 @@ def build_config_from_widgets(widgets_dict):
 
 def display_results(results):
     """
-    Display pipeline results in a user-friendly format.
+    Display pipeline results in a user-friendly format using HTML.
     
     Args:
         results: Dictionary returned from run_pipeline()
     """
-    from IPython.display import Audio, display
+    from IPython.display import Audio, display, HTML
     
-    # Display text outputs
-    print("=" * 60)
-    print("TRANSLATED TRANSCRIPT")
-    print("=" * 60)
-    print(results["text_outputs"]["translated_transcript"][:500] + "...")
-    print("\n")
+    verbose = get_verbosity()
     
-    print("=" * 60)
-    print("KEY POINTS SUMMARY")
-    print("=" * 60)
-    print(results["text_outputs"]["key_points_summary"])
-    print("\n")
+    # Log to console if verbose
+    log_setup("Displaying pipeline results...", 'info', verbose)
     
-    print("=" * 60)
-    print("PODCAST SCRIPT")
-    print("=" * 60)
-    print(results["text_outputs"]["podcast_script"][:500] + "...")
-    print("\n")
-    
-    # Display performance metrics
-    print("=" * 60)
-    print("PERFORMANCE METRICS")
-    print("=" * 60)
-    metrics = results["performance_metrics"]
-    print(f"Total Runtime: {metrics['total_runtime_seconds']:.2f} seconds")
-    print(f"ASR: {metrics['asr']['time_seconds']:.2f}s, VRAM: {metrics['asr']['peak_vram_gb']:.2f}GB")
-    print(f"Translation: {metrics['translation']['time_seconds']:.2f}s, VRAM: {metrics['translation']['peak_vram_gb']:.2f}GB")
-    print(f"Summary: {metrics['summary']['time_seconds']:.2f}s, VRAM: {metrics['summary']['peak_vram_gb']:.2f}GB")
-    print(f"Podcast Script: {metrics['podcast_script']['time_seconds']:.2f}s, VRAM: {metrics['podcast_script']['peak_vram_gb']:.2f}GB")
-    print(f"TTS: {metrics['tts']['time_seconds']:.2f}s, RTF: {metrics['tts']['real_time_factor']:.2f}, VRAM: {metrics['tts']['peak_vram_gb']:.2f}GB")
-    
-    # Display audio
-    print("\n" + "=" * 60)
-    print("PODCAST AUDIO")
-    print("=" * 60)
-    audio_path = results["file_paths"]["final_podcast_audio"]
-    display(Audio(filename=audio_path))
-    print(f"Audio saved to: {audio_path}")
-
-
-def run_pipeline_from_widgets(widgets_dict):
-    """
-    Run the pipeline directly using the current widget values.
-    
-    Args:
-        widgets_dict: Dictionary from create_config_widgets()
-    
-    Returns:
-        Results dictionary from run_pipeline()
-    """
-    import json
-    
-    print("Building configuration from widgets...")
-    config = build_config_from_widgets(widgets_dict)
-    
-    print("Configuration:")
-    print(json.dumps({k: v for k, v in config.items() if k not in ['host_a_wav_path', 'host_b_wav_path']}, indent=2))
-    print("\nStarting pipeline execution...\n")
-    
-    results = run_pipeline(config)
-    display_results(results)
-    
-    return results
-
+    # Display results using HTML template
+    try:
+        metrics = results["performance_metrics"]
+        
+        # Build HTML display
+        html_parts = []
+        
+        # Translated Transcript section
+        html_parts.append(f'''
+        <div style="margin: 20px 0; padding: 15px; background: var(--color-bg-secondary); border-radius: 8px;">
+            <h4 style="color: var(--color-primary); margin-top: 0;">📝 Translated Transcript</h4>
+            <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 13px; max-height: 200px; overflow-y: auto;">{results["text_outputs"]["translated_transcript"][:1000]}...</pre>
+        </div>
+        ''')
+        
+        # Key Points section
+        html_parts.append(f'''
+        <div style="margin: 20px 0; padding: 15px; background: var(--color-bg-secondary); border-radius: 8px;">
+            <h4 style="color: var(--color-primary); margin-top: 0;">📌 Key Points Summary</h4>
+            <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 13px;">{results["text_outputs"]["key_points_summary"]}</pre>
+        </div>
+        ''')
+        
+        # Performance Metrics section
+        html_parts.append(f'''
+        <div style="margin: 20px 0; padding: 15px; background: var(--color-bg-secondary); border-radius: 8px;">
+            <h4 style="color: var(--color-primary); margin-top: 0;">⚡ Performance Metrics</h4>
+            <p><strong>Total Runtime:</strong> {metrics['total_runtime_seconds']:.2f} seconds</p>
+            <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
+                <li>ASR: {metrics['asr']['time_seconds']:.2f}s, VRAM: {metrics['asr']['peak_vram_gb']:.2f}GB</li>
+                <li>Translation: {metrics['translation']['time_seconds']:.2f}s, VRAM: {metrics['translation']['peak_vram_gb']:.2f}GB</li>
+                <li>Summary: {metrics['summary']['time_seconds']:.2f}s, VRAM: {metrics['summary']['peak_vram_gb']:.2f}GB</li>
+                <li>Podcast Script: {metrics['podcast_script']['time_seconds']:.2f}s, VRAM: {metrics['podcast_script']['peak_vram_gb']:.2f}GB</li>
+                <li>TTS: {metrics['tts']['time_seconds']:.2f}s, RTF: {metrics['tts']['real_time_factor']:.2f}, VRAM: {metrics['tts']['peak_vram_gb']:.2f}GB</li>
+            </ul>
+        </div>
+        ''')
+        
+        # Display HTML
+        display(HTML(''.join(html_parts)))
+        
+        # Display audio player
+        audio_path = results["file_paths"]["final_podcast_audio"]
+        display(HTML(f'''
+        <div style="margin: 20px 0; padding: 15px; background: var(--color-bg-secondary); border-radius: 8px;">
+            <h4 style="color: var(--color-primary); margin-top: 0;">🎧 Podcast Audio</h4>
+            <p style="font-size: 13px;">Audio saved to: <code>{audio_path}</code></p>
+        </div>
+        '''))
+        display(Audio(filename=audio_path))
+        
+    except Exception as e:
+        log_setup(f"Error displaying results: {e}", 'error', verbose)
+        # Fallback to simple text display
+        log_setup("Results generated successfully (see output files)", 'success', verbose)

@@ -2462,14 +2462,7 @@ def create_config_widgets():
     
     Returns:
         Dictionary containing all widgets and the config box widget
-    """
-    try:
-        import ipywidgets as widgets
-        from google.colab import output as _colab_output
-        _colab_output.enable_custom_widget_manager()
-    except Exception:
-        import ipywidgets as widgets
-    
+    """   
     # Model options
     ASR_MODELS = [
         "openai/whisper-tiny",

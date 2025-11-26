@@ -787,11 +787,11 @@ def translate_transcript(transcript: str, config: Dict[str, Any]) -> str:
 def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
     """
     Generate key points summary from translated text.
-    
+
     Input:
         translated_text: Translated transcript text
         config: SOLAS_CONFIG dictionary
-    
+
     Output:
         Key points summary as markdown bullets (str)
     """
@@ -800,6 +800,7 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
     chunk_size_chars = config.get("chunk_size_chars", 4000)
     summary_mode = config.get("summary_mode", "greedy")
     max_new_tokens = config.get("summary_max_new_tokens", 512)
+    target_language = config.get("target_language", "English")
     
     verbose = get_verbosity()
     log_setup(f"[Summary] Loading LLM: {llm_model_id}...", 'info', verbose)
@@ -854,14 +855,14 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
         gen_agg_kwargs = gen_chunk_kwargs.copy()
     
     chunk_prompt_header = (
-        "Extract ONLY the most important key points from the transcript segment below. "
+        f"Extract ONLY the most important key points from the transcript segment below in {target_language}. "
         "Focus on core concepts, definitions, equations, conclusions, and actionable takeaways. "
-        "Write a concise markdown bulleted list (use '-' bullets). Do not include any preamble or epilogue."
+        f"Write a concise markdown bulleted list (use '-' bullets) in {target_language}. Do not include any preamble or epilogue."
     )
-    
+
     for chunk in chunks:
         messages = [
-            {"role": "system", "content": "You are an expert technical summarizer."},
+            {"role": "system", "content": f"You are an expert technical summarizer. Provide summaries in {target_language}."},
             {"role": "user", "content": f"{chunk_prompt_header}\n\nTranscript segment:\n\n{chunk}"},
         ]
         
@@ -907,14 +908,14 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
     
     # Aggregation
     aggregation_prompt = (
-        "You will be given multiple markdown bullet lists produced from segments of the same lecture transcript. "
+        f"You will be given multiple markdown bullet lists produced from segments of the same lecture transcript in {target_language}. "
         "Merge and deduplicate them into a single, concise, well-structured set of bullets. "
-        "Prioritize clarity and completeness, keep only the most salient points, and maintain markdown '-' bullets."
+        f"Prioritize clarity and completeness, keep only the most salient points, and maintain markdown '-' bullets in {target_language}."
     )
-    
+
     merged_input = "\n\n".join(partial_bullets)
     messages = [
-        {"role": "system", "content": "You are an expert editor and summarizer."},
+        {"role": "system", "content": f"You are an expert editor and summarizer. Work in {target_language}."},
         {"role": "user", "content": f"{aggregation_prompt}\n\nHere are the partial bullet lists:\n\n{merged_input}"},
     ]
     
@@ -1357,13 +1358,17 @@ def load_template(template_name: str, **kwargs) -> str:
         template_content = f.read()
     
     # Remove HTML comments (template documentation)
-    # Keep only the actual HTML content
+    # Keep only the actual HTML content, BUT preserve placeholder comments
     lines = template_content.split('\n')
     html_lines = []
     in_comment = False
-    
+
     for line in lines:
         stripped = line.strip()
+        # Preserve placeholder comments (used for widget insertion)
+        if 'PLACEHOLDER' in stripped and stripped.startswith('<!--') and stripped.endswith('-->'):
+            html_lines.append(line)
+            continue
         if stripped.startswith('<!--'):
             in_comment = True
             continue
@@ -1372,7 +1377,7 @@ def load_template(template_name: str, **kwargs) -> str:
             continue
         if not in_comment:
             html_lines.append(line)
-    
+
     template_content = '\n'.join(html_lines)
     
     # Perform variable substitution using regex to avoid conflicts with CSS variables
@@ -2406,13 +2411,13 @@ def create_config_widgets():
             description='Podcast Temp:'
         ),
         "source_lang_dropdown": widgets.Dropdown(
-            options=["English", "Spanish", "French", "German", "Italian", "Portuguese", "Russian", "Chinese", "Japanese", "Korean"],
-            value="English",
+            options=["Portuguese", "English", "Spanish", "French", "German", "Italian", "Russian", "Chinese", "Japanese", "Korean"],
+            value="Portuguese",
             description='Source Lang:'
         ),
         "target_lang_dropdown": widgets.Dropdown(
-            options=["Portuguese", "English", "Spanish", "French", "German", "Italian", "Russian", "Chinese", "Japanese", "Korean"],
-            value="Portuguese",
+            options=["English", "Portuguese", "Spanish", "French", "German", "Italian", "Russian", "Chinese", "Japanese", "Korean"],
+            value="English",
             description='Target Lang:'
         ),
         "input_audio_text": widgets.Text(
@@ -2439,7 +2444,7 @@ def create_config_widgets():
     SOLAS_DIR = BASE_DIR / 'SOLAS'
     
     # Set default input audio to short sample
-    widgets_dict["input_audio_text"].value = str(SOLAS_DIR / 'input_audio_samples' / 'short.wav')
+    widgets_dict["input_audio_text"].value = str(SOLAS_DIR / 'input_audio_samples' / 'short.ogg')
     
     # Set default output directory
     widgets_dict["output_dir_text"].value = str(BASE_DIR / 'solas_outputs')

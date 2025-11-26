@@ -1,6 +1,6 @@
 ## Development Gotchas
 
-### 1. Colab Widget CDN Notice
+### Colab Widget CDN Notice
 
 **Problem**: Using `widgets.HTML()` triggers Colab's "Third-party Jupyter widgets" CDN notice panel.
 
@@ -22,7 +22,7 @@ with output:
     display(HTML('<b style="color: green;">My Styled Content</b>'))
 ```
 
-### 2. File Encoding on Windows
+### File Encoding on Windows
 
 **Problem**: Python on Windows defaults to `cp1252` encoding, causing `UnicodeDecodeError` when reading notebooks with emojis/special characters.
 
@@ -36,7 +36,7 @@ data = json.load(open('notebook.ipynb'))
 data = json.load(open('notebook.ipynb', encoding='utf-8'))
 ```
 
-### 6. LLM Generation Parameters
+### LLM Generation Parameters
 
 **Problem**: Passing `temperature`, `top_p`, `top_k` directly to `model.generate()` triggers deprecation warnings.
 
@@ -57,7 +57,7 @@ gen_config = GenerationConfig(
 output = model.generate(input_ids, generation_config=gen_config)
 ```
 
-### 7. Display vs Return in Notebook Cells
+### Display vs Return in Notebook Cells
 
 **Problem**: Functions that return widgets may not display them automatically in all contexts.
 

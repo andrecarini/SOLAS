@@ -2159,7 +2159,12 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
         error_html=error_html
     )
     
-    # Display HTML directly to ensure it's visible
+    # Update progress container with final HTML first (replaces progress widgets with compact design)
+    if progress_container is not None and widgets is not None and HTML is not None:
+        children_list = [widgets.HTML(setup_html)]
+        progress_container.children = children_list
+    
+    # Display HTML directly to ensure it's visible (backup if progress container update fails)
     if HTML is not None:
         try:
             from IPython.display import display
@@ -2167,11 +2172,6 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
             log_setup("Setup completion HTML displayed", 'info', verbose)
         except (ImportError, Exception) as e:
             log_setup(f"Could not display setup HTML: {e}", 'warning', verbose)
-    
-    # Update progress container with final HTML (for widget-based display)
-    if progress_container is not None and widgets is not None and HTML is not None:
-        children_list = [widgets.HTML(setup_html)]
-        progress_container.children = children_list
     
     # Mark step as complete
     if progress_step is not None and step_labels is not None and step_bars is not None:

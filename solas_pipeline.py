@@ -546,7 +546,10 @@ def load_and_preprocess_audio(audio_path: str) -> Tuple[Any, int]:
 
 def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]) -> str:
     """
-    Transcribe audio using Whisper ASR model with automatic chunking for long audio.
+    Transcribe audio using Whisper ASR model with native long-form transcription.
+
+    Uses Whisper's built-in long-form transcription mechanism (Whisper paper, section 3.8)
+    via return_timestamps=True, which activates the model's internal windowing and stitching.
 
     Input:
         audio_tensor: Preprocessed audio tensor [1, frames]
@@ -592,16 +595,25 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
     log_setup(f"[ASR] Loading model: {asr_model_id}...", 'info', verbose)
     log_setup(f"[ASR] Audio duration: {audio_duration_seconds:.1f}s", 'info', verbose)
 
-    # Use pipeline for automatic chunking of long audio
-    # chunk_length_s: Process audio in 30-second chunks (optimal for Whisper)
-    # batch_size: Number of chunks to process in parallel
+    # Suppress transformers warnings in non-verbose mode
+    import os
+    original_verbosity = os.environ.get("TRANSFORMERS_VERBOSITY", "warning")
+    if not verbose:
+        os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
+    # Use pipeline with Whisper's native long-form transcription
+    # return_timestamps=True activates Whisper's internal chunking mechanism
     pipe = pipeline(
         "automatic-speech-recognition",
         model=asr_model_id,
-        torch_dtype=dtype,
+        dtype=dtype,  # Use 'dtype' instead of deprecated 'torch_dtype'
         device=device,
         model_kwargs={"use_safetensors": True}
     )
+
+    # Restore original verbosity
+    if not verbose:
+        os.environ["TRANSFORMERS_VERBOSITY"] = original_verbosity
 
     log_setup(f"[ASR] Model loaded on {device}.", 'info', verbose)
 
@@ -610,16 +622,9 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
     if source_language != "auto":
         generate_kwargs["language"] = source_language
 
-    # Calculate chunking parameters
-    # For audio longer than 30 seconds, use chunking
+    # For long audio, inform user we're using native long-form transcription
     if audio_duration_seconds > 30:
-        log_setup(f"[ASR] Long audio detected, using automatic chunking (30s chunks)...", 'info', verbose)
-        chunk_length_s = 30
-        batch_size = 8 if torch.cuda.is_available() else 1
-    else:
-        # For short audio, process in one go
-        chunk_length_s = None
-        batch_size = 1
+        log_setup(f"[ASR] Long audio detected, using Whisper's native long-form transcription...", 'info', verbose)
 
     # Create progress indicator
     estimated_processing_time = max(5.0, audio_duration_seconds / 20.0)
@@ -653,13 +658,12 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
 
     log_setup(f"[ASR] Transcribing audio ({audio_duration_seconds:.1f}s duration)...", 'info', verbose)
 
-    # Run transcription with chunking
+    # Run transcription using Whisper's native long-form mode
+    # return_timestamps=True enables internal windowing and stitching (no chunk_length_s needed)
     result = pipe(
         audio_np,
-        chunk_length_s=chunk_length_s,
-        batch_size=batch_size,
         generate_kwargs=generate_kwargs,
-        return_timestamps=False
+        return_timestamps=True  # Activates Whisper's built-in long-form transcription
     )
 
     if progress_thread is not None:
@@ -667,8 +671,13 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
         if progress_thread.is_alive():
             progress_thread.join(timeout=1.0)
 
-    # Extract transcript
-    transcript = result["text"].strip()
+    # Extract transcript (timestamps are included in chunks, we concatenate the text)
+    if "chunks" in result:
+        # Long-form transcription with timestamps returns chunks
+        transcript = " ".join([chunk["text"] for chunk in result["chunks"]]).strip()
+    else:
+        # Fallback for short audio
+        transcript = result["text"].strip()
 
     actual_time = time.time() - start_time
     speed_factor = audio_duration_seconds / actual_time if actual_time > 0 else 0
@@ -702,9 +711,10 @@ def translate_transcript(transcript: str, config: Dict[str, Any]) -> str:
     max_new_tokens = config.get("translation_max_new_tokens", 1024)
     
     verbose = get_verbosity()
+    _suppress_generation_flags_warnings()  # Suppress invalid generation flags warnings
     log_setup(f"[Translation] Loading LLM: {llm_model_id}...", 'info', verbose)
     tokenizer, model = ensure_llm(llm_model_id, quantization)
-    
+
     chunks = chunk_text(transcript, chunk_size_chars)
     verbose = get_verbosity()
     log_setup(f"Processing {len(chunks)} chunk(s)...", 'info', verbose)
@@ -969,6 +979,7 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
     target_language = config.get("target_language", "Portuguese")
     
     verbose = get_verbosity()
+    _suppress_generation_flags_warnings()  # Suppress invalid generation flags warnings
     log_setup(f"[Podcast Script] Loading LLM: {llm_model_id}...", 'info', verbose)
     tokenizer, model = ensure_llm(llm_model_id, quantization)
     

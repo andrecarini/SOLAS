@@ -48,6 +48,39 @@ def _suppress_generation_flags_warnings():
         # Suppress warnings about invalid generation flags (temperature, top_p, top_k)
         warnings.filterwarnings("ignore", message=".*generation flags are not valid.*", category=UserWarning)
         warnings.filterwarnings("ignore", message=".*generation flags are not valid.*", category=FutureWarning)
+
+def _suppress_tts_warnings():
+    """Suppress TTS library warnings unless in debug mode."""
+    verbose = get_verbosity()
+    if not verbose:
+        # Set TTS logger to ERROR level to reduce noise
+        import logging
+        logging.getLogger("TTS").setLevel(logging.ERROR)
+
+class _SuppressOutput:
+    """Context manager to temporarily suppress stdout and stderr."""
+    def __init__(self, suppress=True):
+        self.suppress = suppress
+        self.original_stdout = None
+        self.original_stderr = None
+
+    def __enter__(self):
+        if self.suppress:
+            import sys
+            self.original_stdout = sys.stdout
+            self.original_stderr = sys.stderr
+            sys.stdout = open(os.devnull, 'w')
+            sys.stderr = open(os.devnull, 'w')
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.suppress:
+            import sys
+            sys.stdout.close()
+            sys.stderr.close()
+            sys.stdout = self.original_stdout
+            sys.stderr = self.original_stderr
+
 import shutil
 import platform
 import importlib.metadata
@@ -631,8 +664,9 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
     start_time = time.time()
 
     # Try to use tqdm for progress if available
+    # Use tqdm.std (text-only) instead of tqdm.auto to avoid triggering widget CDN notice in Colab
     try:
-        from tqdm.auto import tqdm
+        from tqdm.std import tqdm
         import threading
         pbar = tqdm(total=100, desc="Transcribing", unit="%", ncols=80)
 
@@ -1093,9 +1127,12 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
     if not verbose:
         # Suppress all SyntaxWarnings (jieba has invalid escape sequences in regex patterns)
         warnings.filterwarnings("ignore", category=SyntaxWarning)
-    
+
+    # Suppress TTS warnings
+    _suppress_tts_warnings()
+
     # Install torchcodec if not available (required by torchaudio for some audio loading operations)
-    
+
     # torchcodec is needed when torchaudio tries to use it as a backend
     try:
         import torchcodec
@@ -1121,43 +1158,106 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
         except Exception as e:
             log_setup(f"[TTS] ⚠ Could not install torchcodec: {e}", 'warning', verbose)
             log_setup("[TTS] Attempting to continue with soundfile backend...", 'info', verbose)
-    
+
     # Lazy import TTS - only import when this function is called
-    from TTS.api import TTS as COQUI_TTS
-    tts_engine = COQUI_TTS(model_name=tts_model_id)
-    try:
-        tts_engine = tts_engine.to(device)
-    except Exception:
-        pass
+    # Suppress TTS initialization output ("Device set to use cuda") in non-verbose mode
+    with _SuppressOutput(suppress=not verbose):
+        from TTS.api import TTS as COQUI_TTS
+        tts_engine = COQUI_TTS(model_name=tts_model_id)
+        try:
+            tts_engine = tts_engine.to(device)
+        except Exception:
+            pass
     
     # Determine output sample rate
     output_sample_rate = getattr(tts_engine, "output_sample_rate", 24000)
-    
+
+    # Helper function to chunk text into segments <= 250 characters
+    def chunk_text(text, max_length=250):
+        """Split text into chunks at sentence boundaries, respecting max_length."""
+        if len(text) <= max_length:
+            return [text]
+
+        chunks = []
+        import re
+        # Split on sentence boundaries
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+
+        current_chunk = ""
+        for sentence in sentences:
+            # If a single sentence is longer than max_length, split it at commas or spaces
+            if len(sentence) > max_length:
+                # First, add any accumulated chunk
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = ""
+
+                # Split long sentence at commas
+                parts = re.split(r',\s+', sentence)
+                for part in parts:
+                    if len(part) > max_length:
+                        # Split at spaces as last resort
+                        words = part.split()
+                        temp = ""
+                        for word in words:
+                            if len(temp) + len(word) + 1 <= max_length:
+                                temp = f"{temp} {word}".strip()
+                            else:
+                                if temp:
+                                    chunks.append(temp)
+                                temp = word
+                        if temp:
+                            chunks.append(temp)
+                    else:
+                        if len(current_chunk) + len(part) + 2 <= max_length:
+                            current_chunk = f"{current_chunk}, {part}".strip(", ")
+                        else:
+                            if current_chunk:
+                                chunks.append(current_chunk.strip())
+                            current_chunk = part
+            else:
+                # Check if adding this sentence would exceed max_length
+                if len(current_chunk) + len(sentence) + 1 <= max_length:
+                    current_chunk = f"{current_chunk} {sentence}".strip()
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence
+
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+
+        return chunks
+
     import numpy as np
     lines = [line.strip() for line in script.splitlines() if line.strip()]
     segments = []
-    
+
     for line in lines:
         speaker = "A" if line.startswith("Host A:") else ("B" if line.startswith("Host B:") else None)
         text = line.split(":", 1)[1].strip() if ":" in line else line
         if not text:
             continue
-        
+
         speaker_wav = None
         if speaker == "A" and host_a_wav_path and Path(host_a_wav_path).exists():
             speaker_wav = host_a_wav_path
         elif speaker == "B" and host_b_wav_path and Path(host_b_wav_path).exists():
             speaker_wav = host_b_wav_path
-        
-        try:
-            wav = tts_engine.tts(text=text, language=lang_code, speaker_wav=speaker_wav)
-        except TypeError:
-            wav = tts_engine.tts(text=text, speaker_wav=speaker_wav, language=lang_code)
-        
-        wav = np.asarray(wav, dtype=np.float32)
-        if wav.ndim == 2:
-            wav = wav.mean(axis=1)
-        segments.append(wav)
+
+        # Chunk text to respect XTTS 250-character limit
+        text_chunks = chunk_text(text, max_length=250)
+
+        for chunk in text_chunks:
+            try:
+                wav = tts_engine.tts(text=chunk, language=lang_code, speaker_wav=speaker_wav)
+            except TypeError:
+                wav = tts_engine.tts(text=chunk, speaker_wav=speaker_wav, language=lang_code)
+
+            wav = np.asarray(wav, dtype=np.float32)
+            if wav.ndim == 2:
+                wav = wav.mean(axis=1)
+            segments.append(wav)
     
     if not segments:
         raise RuntimeError("No audio segments were generated.")
@@ -1192,13 +1292,20 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
         - performance_metrics: Timing and resource usage for each stage
     """
     verbose = get_verbosity()
-    
+
     # Suppress warnings and progress bars early, before any model loading
     if not verbose:
         # Suppress all SyntaxWarnings (usually from third-party libs like jieba with invalid escape sequences)
         warnings.filterwarnings("ignore", category=SyntaxWarning)
         # Suppress Hugging Face Hub download progress bars
         os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        # Suppress transformers verbosity
+        os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+        # Disable tqdm globally to suppress all progress bars
+        os.environ["TQDM_DISABLE"] = "1"
+
+    # Suppress generation flags warnings
+    _suppress_generation_flags_warnings()
     
     pipeline_start_time = time.time()
     performance_metrics = {}

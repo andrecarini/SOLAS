@@ -1515,21 +1515,31 @@ def _create_progress_widgets():
     """
     try:
         import ipywidgets as widgets
+        from IPython.display import display, HTML
     except ImportError:
         # If ipywidgets not available, return None widgets
         return None
     
+    # Use Output widgets instead of HTML widgets to avoid CDN notice
+    # Each Output widget will contain HTML that we display into it
+    def create_label_output(html_content):
+        """Create an Output widget with initial HTML content."""
+        output = widgets.Output(layout=widgets.Layout(width='420px'))
+        with output:
+            display(HTML(html_content))
+        return output
+    
     step_labels = {
-        1: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 1/5: Checking system dependencies...</div>'),
-        2: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 2/5: Installing system dependencies...</div>'),
-        3: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 3/5: Checking Python dependencies...</div>'),
-        4: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 4/5: Installing Python dependencies...</div>'),
-        '4a': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Collecting packages...</div>'),
-        '4b': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Downloading packages...</div>'),
-        '4c': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Building wheels...</div>'),
-        '4d': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Uninstalling old versions...</div>'),
-        '4e': widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px; margin-left: 20px;">⏺ Installing packages...</div>'),
-        5: widgets.HTML(value='<div style="color: var(--color-text-secondary); width: 420px;">⏺ Step 5/5: Finalizing setup...</div>'),
+        1: create_label_output('<div style="color: var(--color-text-secondary);">⏺ Step 1/5: Checking system dependencies...</div>'),
+        2: create_label_output('<div style="color: var(--color-text-secondary);">⏺ Step 2/5: Installing system dependencies...</div>'),
+        3: create_label_output('<div style="color: var(--color-text-secondary);">⏺ Step 3/5: Checking Python dependencies...</div>'),
+        4: create_label_output('<div style="color: var(--color-text-secondary);">⏺ Step 4/5: Installing Python dependencies...</div>'),
+        '4a': create_label_output('<div style="color: var(--color-text-secondary); margin-left: 20px;">⏺ Collecting packages...</div>'),
+        '4b': create_label_output('<div style="color: var(--color-text-secondary); margin-left: 20px;">⏺ Downloading packages...</div>'),
+        '4c': create_label_output('<div style="color: var(--color-text-secondary); margin-left: 20px;">⏺ Building wheels...</div>'),
+        '4d': create_label_output('<div style="color: var(--color-text-secondary); margin-left: 20px;">⏺ Uninstalling old versions...</div>'),
+        '4e': create_label_output('<div style="color: var(--color-text-secondary); margin-left: 20px;">⏺ Installing packages...</div>'),
+        5: create_label_output('<div style="color: var(--color-text-secondary);">⏺ Step 5/5: Finalizing setup...</div>'),
     }
     
     step_bars = {
@@ -1568,8 +1578,13 @@ def _create_progress_widgets():
         step_rows['4e'],
     ], layout=widgets.Layout(display='none'))
     
+    # Create header using Output widget to avoid CDN notice
+    header_output = widgets.Output()
+    with header_output:
+        display(HTML('<h3 style="color: var(--color-primary); margin-bottom: 10px;">🔧 Setting up SOLAS Environment</h3>'))
+    
     progress_container = widgets.VBox([
-        widgets.HTML('<h3 style="color: var(--color-primary); margin-bottom: 10px;">🔧 Setting up SOLAS Environment</h3>'),
+        header_output,
         step_rows[1],
         step_rows[2],
         step_rows[3],
@@ -1589,8 +1604,13 @@ def _create_progress_widgets():
 
 def _update_progress_widget(message: str, step, total: int, status: str, progress: Optional[int],
                            step_labels: dict, step_bars: dict) -> None:
-    """Update progress widget display"""
+    """Update progress widget display (uses Output widgets for labels)"""
     if step is None:
+        return
+    
+    try:
+        from IPython.display import display, HTML, clear_output
+    except ImportError:
         return
     
     # Update the specific step indicator
@@ -1614,16 +1634,20 @@ def _update_progress_widget(message: str, step, total: int, status: str, progres
     if isinstance(step, str):
         # Substep - no "Step X/Y" prefix
         margin_left = 'margin-left: 20px;' if step.startswith('4') else ''
-        step_html = f'<div style="color: {color}; font-weight: {weight}; width: 420px; {margin_left}">{icon} {message}</div>'
+        step_html = f'<div style="color: {color}; font-weight: {weight}; {margin_left}">{icon} {message}</div>'
     else:
         # Main step - requires total
         if total is not None:
-            step_html = f'<div style="color: {color}; font-weight: {weight}; width: 420px;">{icon} Step {step}/{total}: {message}</div>'
+            step_html = f'<div style="color: {color}; font-weight: {weight};">{icon} Step {step}/{total}: {message}</div>'
         else:
-            step_html = f'<div style="color: {color}; font-weight: {weight}; width: 420px;">{icon} {message}</div>'
+            step_html = f'<div style="color: {color}; font-weight: {weight};">{icon} {message}</div>'
     
+    # Update Output widget by clearing and redisplaying HTML
     if step in step_labels:
-        step_labels[step].value = step_html
+        label_output = step_labels[step]
+        with label_output:
+            clear_output(wait=True)
+            display(HTML(step_html))
     
     # Update progress bar
     if step in step_bars:
@@ -1981,12 +2005,23 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
         Dict with: restart_needed, dependency_data, gpu_available, device_name, progress_container
     """
     verbose = get_verbosity()
-    try:
-        import ipywidgets as widgets
-        from IPython.display import HTML
-    except ImportError:
-        widgets = None
-        HTML = None
+    
+    # Only import widgets if we have a progress container to update
+    widgets = None
+    HTML = None
+    if progress_container is not None:
+        try:
+            import ipywidgets as widgets
+            from IPython.display import HTML
+        except ImportError:
+            pass
+    
+    # Always need HTML for display
+    if HTML is None:
+        try:
+            from IPython.display import HTML
+        except ImportError:
+            pass
     
     # Step 1: GPU check
     if progress_step is not None and step_labels is not None and step_bars is not None:
@@ -2159,17 +2194,17 @@ def _finalize_setup(package_list: List[str], bnb_updated: bool, progress_step: O
         error_html=error_html
     )
     
-    # Update progress container with final HTML (replaces progress widgets with compact design)
-    if progress_container is not None and widgets is not None and HTML is not None:
+    # Clear the progress container (hide the progress widgets)
+    if progress_container is not None and widgets is not None:
         try:
-            children_list = [widgets.HTML(setup_html)]
-            progress_container.children = children_list
-            log_setup("Setup completion HTML updated in progress container", 'info', verbose)
+            # Hide the container by clearing its children
+            progress_container.children = []
+            progress_container.layout.display = 'none'
+            log_setup("Progress container cleared", 'info', verbose)
         except Exception as e:
-            log_setup(f"Failed to update progress container: {e}", 'warning', verbose)
+            log_setup(f"Failed to clear progress container: {e}", 'warning', verbose)
     
-    # Always display HTML directly to ensure it's visible
-    # (Container update might not be visible if container wasn't properly displayed)
+    # Always display final HTML directly (more reliable than updating container)
     if HTML is not None:
         try:
             from IPython.display import display
@@ -2562,17 +2597,14 @@ def create_config_widgets():
     widgets_dict["host_b_text"].value = str(SOLAS_DIR / 'TTS_voice_samples' / 'female.wav')
     
     # Create config box with proper layout
+    # Section labels will be displayed separately using IPython.display.HTML
     config_box = widgets.VBox([
-        widgets.HTML('<h3>SOLAS Configuration</h3>'),
-        widgets.HTML('<b>Models</b>'),
         widgets_dict["asr_dropdown"],
         widgets_dict["llm_dropdown"],
         widgets_dict["quantization_dropdown"],
-        widgets.HTML('<b>Processing Parameters</b>'),
         widgets_dict["chunk_size_dropdown"],
         widgets_dict["summary_mode_dropdown"],
         widgets_dict["podcast_temp_slider"],
-        widgets.HTML('<b>Languages</b>'),
         widgets_dict["source_lang_dropdown"],
         widgets_dict["target_lang_dropdown"],
     ], layout=widgets.Layout(
@@ -2632,10 +2664,9 @@ def create_audio_upload_widget(widgets_dict):
                 print('No file selected.')
         
         upload_btn.on_click(on_colab_upload)
-        return widgets.VBox([
-            widgets.HTML('<b>Upload input audio</b>'),
-            upload_btn
-        ])
+        label = widgets.Label(value='Upload input audio')
+        label.style.font_weight = 'bold'
+        return widgets.VBox([label, upload_btn])
     else:
         # Local Jupyter file upload - auto-save when file is selected
         uploader = widgets.FileUpload(accept='.wav,.mp3,.m4a,.flac,.ogg', multiple=False)
@@ -2653,11 +2684,9 @@ def create_audio_upload_widget(widgets_dict):
             status.value = f'✓ Saved and set audio path to: {save_path}'
         
         uploader.observe(_on_file_selected, names='value')
-        return widgets.VBox([
-            widgets.HTML('<b>Upload input audio</b>'),
-            uploader,
-            status
-        ])
+        label = widgets.Label(value='Upload input audio')
+        label.style.font_weight = 'bold'
+        return widgets.VBox([label, uploader, status])
 
 
 def create_host_voice_upload_widget(widgets_dict, host_key):
@@ -2707,10 +2736,9 @@ def create_host_voice_upload_widget(widgets_dict, host_key):
                 print('No file selected.')
         
         upload_btn.on_click(on_colab_upload)
-        return widgets.VBox([
-            widgets.HTML(f'<b>Upload {host_name} voice (for TTS cloning)</b>'),
-            upload_btn
-        ])
+        label = widgets.Label(value=f'Upload {host_name} voice (for TTS cloning)')
+        label.style.font_weight = 'bold'
+        return widgets.VBox([label, upload_btn])
     else:
         # Local Jupyter file upload - auto-save when file is selected
         uploader = widgets.FileUpload(accept='.wav,.mp3,.m4a,.flac,.ogg', multiple=False)
@@ -2728,11 +2756,9 @@ def create_host_voice_upload_widget(widgets_dict, host_key):
             status.value = f'✓ Saved and set {host_name} voice path to: {save_path}'
         
         uploader.observe(_on_file_selected, names='value')
-        return widgets.VBox([
-            widgets.HTML(f'<b>Upload {host_name} voice (for TTS cloning)</b>'),
-            uploader,
-            status
-        ])
+        label = widgets.Label(value=f'Upload {host_name} voice (for TTS cloning)')
+        label.style.font_weight = 'bold'
+        return widgets.VBox([label, uploader, status])
 
 
 def build_config_from_widgets(widgets_dict):

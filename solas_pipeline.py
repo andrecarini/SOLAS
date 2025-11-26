@@ -2311,7 +2311,8 @@ def setup_environment_with_progress() -> Dict[str, Any]:
 
 # ============================================================================
 # Interactive Notebook Helper Functions
-# ============================================================================def create_config_widgets():
+# ============================================================================
+def create_config_widgets():
     """
     Create and return all configuration widgets for the interactive interface.
     

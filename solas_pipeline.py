@@ -40,6 +40,14 @@ def _suppress_torch_dtype_warnings():
     if not verbose:
         warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*", category=FutureWarning)
         warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*", category=UserWarning)
+
+def _suppress_generation_flags_warnings():
+    """Suppress generation flags warnings (invalid parameters) unless in debug mode."""
+    verbose = get_verbosity()
+    if not verbose:
+        # Suppress warnings about invalid generation flags (temperature, top_p, top_k)
+        warnings.filterwarnings("ignore", message=".*generation flags are not valid.*", category=UserWarning)
+        warnings.filterwarnings("ignore", message=".*generation flags are not valid.*", category=FutureWarning)
 import shutil
 import platform
 import importlib.metadata
@@ -538,26 +546,26 @@ def load_and_preprocess_audio(audio_path: str) -> Tuple[Any, int]:
 
 def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]) -> str:
     """
-    Transcribe audio using Whisper ASR model.
-    
+    Transcribe audio using Whisper ASR model with automatic chunking for long audio.
+
     Input:
         audio_tensor: Preprocessed audio tensor [1, frames]
         sample_rate: Sample rate of the audio
         config: SOLAS_CONFIG dictionary
-    
+
     Output:
         Transcribed text (str)
     """
     import torch
     import numpy as np
-    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
-    
+    from transformers import pipeline
+
     device = _get_device()
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    
+
     asr_model_id = config["asr_model_id"]
     source_language = config.get("source_language", "auto")
-    
+
     # Convert language name to code if needed (Whisper expects codes)
     if source_language != "auto":
         lang_name_to_code = {
@@ -573,118 +581,106 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
             "Korean": "ko",
         }
         source_language = lang_name_to_code.get(source_language, source_language)
-    
+
     verbose = get_verbosity()
     _suppress_torch_dtype_warnings()  # Suppress deprecation warning in non-debug mode
-    log_setup(f"[ASR] Loading model: {asr_model_id}...", 'info', verbose)
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        asr_model_id,
-        dtype=dtype,
-        low_cpu_mem_usage=True,
-        use_safetensors=True,
-    )
-    processor = AutoProcessor.from_pretrained(asr_model_id)
-    
-    # Move model to device
-    model_device = torch.device(device)
-    model = model.to(model_device)
-    log_setup(f"[ASR] Model loaded on {device}.", 'info', verbose)
-    
+
     # Process audio
     audio_np = audio_tensor.squeeze(0).cpu().numpy().astype(np.float32)
-    input_audio = {"array": audio_np, "sampling_rate": int(sample_rate)}
-    
-    # Extract features
-    inputs = processor(
-        input_audio["array"],
-        sampling_rate=input_audio["sampling_rate"],
-        return_tensors="pt",
-    )
-    # Move to device and convert to model's dtype
-    inputs = {k: v.to(model_device).to(dtype) if v.dtype.is_floating_point else v.to(model_device) 
-              for k, v in inputs.items()}
-    
-    # Create attention mask to fix warning about pad/eos token conflict
-    # For Whisper, all input features should be attended to (no padding in mel spectrograms)
-    input_features = inputs["input_features"]
-    attention_mask = torch.ones(
-        input_features.shape[:2], 
-        dtype=torch.long, 
-        device=model_device
-    )
-    
-    # Prepare generation kwargs - Use task and language parameters (preferred over forced_decoder_ids)
-    gen_kwargs = {
-        "task": "transcribe",
-        "attention_mask": attention_mask
-    }
-    if source_language != "auto":
-        gen_kwargs["language"] = source_language
-    # If "auto", let Whisper detect language automatically (language=None or omit)
-    
-    # Calculate audio duration for progress estimation
     audio_duration_seconds = audio_np.shape[0] / sample_rate
-    
-    # Generate transcription using model's own chunking mechanism
-    log_setup(f"[ASR] Transcribing audio ({audio_duration_seconds:.1f}s duration)...", 'info', verbose)
-    
+
+    log_setup(f"[ASR] Loading model: {asr_model_id}...", 'info', verbose)
+    log_setup(f"[ASR] Audio duration: {audio_duration_seconds:.1f}s", 'info', verbose)
+
+    # Use pipeline for automatic chunking of long audio
+    # chunk_length_s: Process audio in 30-second chunks (optimal for Whisper)
+    # batch_size: Number of chunks to process in parallel
+    pipe = pipeline(
+        "automatic-speech-recognition",
+        model=asr_model_id,
+        torch_dtype=dtype,
+        device=device,
+        model_kwargs={"use_safetensors": True}
+    )
+
+    log_setup(f"[ASR] Model loaded on {device}.", 'info', verbose)
+
+    # Prepare generation kwargs
+    generate_kwargs = {"task": "transcribe"}
+    if source_language != "auto":
+        generate_kwargs["language"] = source_language
+
+    # Calculate chunking parameters
+    # For audio longer than 30 seconds, use chunking
+    if audio_duration_seconds > 30:
+        log_setup(f"[ASR] Long audio detected, using automatic chunking (30s chunks)...", 'info', verbose)
+        chunk_length_s = 30
+        batch_size = 8 if torch.cuda.is_available() else 1
+    else:
+        # For short audio, process in one go
+        chunk_length_s = None
+        batch_size = 1
+
     # Create progress indicator
-    # Whisper typically processes at ~10-30x real-time, so estimate total time
-    estimated_processing_time = max(5.0, audio_duration_seconds / 20.0)  # Conservative estimate
+    estimated_processing_time = max(5.0, audio_duration_seconds / 20.0)
     start_time = time.time()
-    
+
     # Try to use tqdm for progress if available
     try:
         from tqdm.auto import tqdm
         import threading
-        # Use tqdm progress bar
         pbar = tqdm(total=100, desc="Transcribing", unit="%", ncols=80)
-        
+
         def update_progress():
             elapsed = time.time() - start_time
             progress = min(95, int((elapsed / estimated_processing_time) * 100))
             pbar.update(progress - pbar.n)
-            return elapsed < estimated_processing_time * 1.5  # Stop updating after 1.5x estimate
-        
-        # Start a simple timer-based progress update
+            return elapsed < estimated_processing_time * 1.5
+
         stop_flag = threading.Event()
-        
+
         def progress_updater():
             while not stop_flag.is_set() and update_progress():
                 time.sleep(0.5)
-            pbar.update(100 - pbar.n)  # Complete the bar
+            pbar.update(100 - pbar.n)
             pbar.close()
-        
+
         progress_thread = threading.Thread(target=progress_updater, daemon=True)
         progress_thread.start()
     except ImportError:
         progress_thread = None
         stop_flag = None
-    
-    with torch.no_grad():
-        generated_ids = model.generate(
-            input_features,
-            **gen_kwargs
-        )
-    
+
+    log_setup(f"[ASR] Transcribing audio ({audio_duration_seconds:.1f}s duration)...", 'info', verbose)
+
+    # Run transcription with chunking
+    result = pipe(
+        audio_np,
+        chunk_length_s=chunk_length_s,
+        batch_size=batch_size,
+        generate_kwargs=generate_kwargs,
+        return_timestamps=False
+    )
+
     if progress_thread is not None:
         stop_flag.set()
         if progress_thread.is_alive():
             progress_thread.join(timeout=1.0)
-    
-    # Decode transcription
-    transcript = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+    # Extract transcript
+    transcript = result["text"].strip()
+
     actual_time = time.time() - start_time
     speed_factor = audio_duration_seconds / actual_time if actual_time > 0 else 0
     log_setup(f"[ASR] Transcription complete ({actual_time:.1f}s, {speed_factor:.1f}x real-time)", 'success', verbose)
-    
+    log_setup(f"[ASR] Transcript length: {len(transcript)} characters", 'info', verbose)
+
     # Cleanup
-    import torch
-    del model, processor
+    del pipe
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    
+
     return transcript
 
 
@@ -802,45 +798,50 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
     chunks = chunk_text(translated_text, chunk_size_chars)
     partial_bullets = []
     
+    # Suppress generation flags warnings in non-debug mode
+    _suppress_generation_flags_warnings()
+    
     # Chunk-level generation kwargs
     from transformers import GenerationConfig
     if summary_mode == "sampled":
-        gen_chunk_kwargs = {
-            "max_new_tokens": max_new_tokens,
-            "do_sample": True,
-            "pad_token_id": tokenizer.eos_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
-        }
-        # Use GenerationConfig for sampling parameters to avoid warnings
+        # Use GenerationConfig for all generation parameters to avoid warnings
         gen_config = GenerationConfig(
+            max_new_tokens=max_new_tokens,
             do_sample=True,
             temperature=0.2,
             top_p=0.9,
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
-        gen_chunk_kwargs["generation_config"] = gen_config
-    else:
         gen_chunk_kwargs = {
-            "max_new_tokens": max_new_tokens,
-            "do_sample": False,
-            "pad_token_id": tokenizer.eos_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
+            "generation_config": gen_config
+        }
+    else:
+        # Use GenerationConfig for greedy mode too to avoid model default config issues
+        gen_config = GenerationConfig(
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+        gen_chunk_kwargs = {
+            "generation_config": gen_config
         }
     
     # Aggregation generation kwargs
     if summary_mode == "hybrid":
+        gen_config_agg = GenerationConfig(
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
         gen_agg_kwargs = {
-            "max_new_tokens": max_new_tokens,
-            "do_sample": False,
-            "pad_token_id": tokenizer.eos_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
+            "generation_config": gen_config_agg
         }
     else:
         # Make a copy to avoid modifying the original
         gen_agg_kwargs = gen_chunk_kwargs.copy()
-        if "generation_config" in gen_agg_kwargs:
-            gen_agg_kwargs["generation_config"] = gen_chunk_kwargs["generation_config"]
     
     chunk_prompt_header = (
         "Extract ONLY the most important key points from the transcript segment below. "
@@ -1075,17 +1076,13 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
     # Automatically accept Coqui TTS terms of service to avoid interactive prompt
     os.environ["COQUI_TOS_AGREED"] = "1"
     
-    # Suppress jieba SyntaxWarnings (invalid escape sequences in regex patterns) in non-debug mode
+    # Suppress jieba SyntaxWarnings BEFORE importing TTS (which imports jieba)
     verbose = get_verbosity()
     if not verbose:
-        warnings.filterwarnings("ignore", category=SyntaxWarning, module="jieba")
-    
-    # Suppress Hugging Face Hub download progress bars in non-debug mode
-    if not verbose:
-        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        # Suppress all SyntaxWarnings (jieba has invalid escape sequences in regex patterns)
+        warnings.filterwarnings("ignore", category=SyntaxWarning)
     
     # Install torchcodec if not available (required by torchaudio for some audio loading operations)
-    verbose = get_verbosity()
     
     # torchcodec is needed when torchaudio tries to use it as a backend
     try:
@@ -1183,6 +1180,14 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
         - performance_metrics: Timing and resource usage for each stage
     """
     verbose = get_verbosity()
+    
+    # Suppress warnings and progress bars early, before any model loading
+    if not verbose:
+        # Suppress all SyntaxWarnings (usually from third-party libs like jieba with invalid escape sequences)
+        warnings.filterwarnings("ignore", category=SyntaxWarning)
+        # Suppress Hugging Face Hub download progress bars
+        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    
     pipeline_start_time = time.time()
     performance_metrics = {}
     

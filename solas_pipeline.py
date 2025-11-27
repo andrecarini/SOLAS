@@ -663,30 +663,34 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
     estimated_processing_time = max(5.0, audio_duration_seconds / 20.0)
     start_time = time.time()
 
-    # Try to use tqdm for progress if available
+    # Try to use tqdm for progress if available (verbose mode only)
     # Use tqdm.std (text-only) instead of tqdm.auto to avoid triggering widget CDN notice in Colab
-    try:
-        from tqdm.std import tqdm
-        import threading
-        pbar = tqdm(total=100, desc="Transcribing", unit="%", ncols=80)
+    if verbose:
+        try:
+            from tqdm.std import tqdm
+            import threading
+            pbar = tqdm(total=100, desc="Transcribing", unit="%", ncols=80)
 
-        def update_progress():
-            elapsed = time.time() - start_time
-            progress = min(95, int((elapsed / estimated_processing_time) * 100))
-            pbar.update(progress - pbar.n)
-            return elapsed < estimated_processing_time * 1.5
+            def update_progress():
+                elapsed = time.time() - start_time
+                progress = min(95, int((elapsed / estimated_processing_time) * 100))
+                pbar.update(progress - pbar.n)
+                return elapsed < estimated_processing_time * 1.5
 
-        stop_flag = threading.Event()
+            stop_flag = threading.Event()
 
-        def progress_updater():
-            while not stop_flag.is_set() and update_progress():
-                time.sleep(0.5)
-            pbar.update(100 - pbar.n)
-            pbar.close()
+            def progress_updater():
+                while not stop_flag.is_set() and update_progress():
+                    time.sleep(0.5)
+                pbar.update(100 - pbar.n)
+                pbar.close()
 
-        progress_thread = threading.Thread(target=progress_updater, daemon=True)
-        progress_thread.start()
-    except ImportError:
+            progress_thread = threading.Thread(target=progress_updater, daemon=True)
+            progress_thread.start()
+        except ImportError:
+            progress_thread = None
+            stop_flag = None
+    else:
         progress_thread = None
         stop_flag = None
 

@@ -577,7 +577,7 @@ def load_and_preprocess_audio(audio_path: str) -> Tuple[Any, int]:
     return waveform.contiguous(), target_sr
 
 
-def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]) -> str:
+def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any], progress_callback: Optional[Callable[[int, str, int], None]] = None) -> str:
     """
     Transcribe audio using Whisper ASR model with native long-form transcription.
 
@@ -663,36 +663,48 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
     estimated_processing_time = max(5.0, audio_duration_seconds / 20.0)
     start_time = time.time()
 
-    # Try to use tqdm for progress if available (verbose mode only)
-    # Use tqdm.std (text-only) instead of tqdm.auto to avoid triggering widget CDN notice in Colab
-    if verbose:
-        try:
-            from tqdm.std import tqdm
-            import threading
-            pbar = tqdm(total=100, desc="Transcribing", unit="%", ncols=80)
+    # Setup progress tracking (works in both verbose and non-verbose modes)
+    import threading
+    stop_flag = threading.Event()
+    progress_thread = None
 
-            def update_progress():
-                elapsed = time.time() - start_time
-                progress = min(95, int((elapsed / estimated_processing_time) * 100))
-                pbar.update(progress - pbar.n)
-                return elapsed < estimated_processing_time * 1.5
+    if progress_callback or verbose:
+        if verbose:
+            # Verbose mode: use tqdm
+            try:
+                from tqdm.std import tqdm
+                pbar = tqdm(total=100, desc="Transcribing", unit="%", ncols=80)
 
-            stop_flag = threading.Event()
+                def update_progress_verbose():
+                    while not stop_flag.is_set():
+                        elapsed = time.time() - start_time
+                        progress = min(95, int((elapsed / estimated_processing_time) * 100))
+                        pbar.update(progress - pbar.n)
+                        if progress_callback:
+                            progress_callback(2, "Transcribing audio (ASR)", progress)
+                        if elapsed >= estimated_processing_time * 1.5:
+                            break
+                        time.sleep(0.5)
+                    pbar.update(100 - pbar.n)
+                    pbar.close()
 
-            def progress_updater():
-                while not stop_flag.is_set() and update_progress():
-                    time.sleep(0.5)
-                pbar.update(100 - pbar.n)
-                pbar.close()
+                progress_thread = threading.Thread(target=update_progress_verbose, daemon=True)
+                progress_thread.start()
+            except ImportError:
+                pass
+        elif progress_callback:
+            # Non-verbose mode: update callback only
+            def update_progress_callback():
+                while not stop_flag.is_set():
+                    elapsed = time.time() - start_time
+                    progress = min(95, int((elapsed / estimated_processing_time) * 100))
+                    progress_callback(2, "Transcribing audio (ASR)", progress)
+                    if elapsed >= estimated_processing_time * 1.5:
+                        break
+                    time.sleep(0.3)
 
-            progress_thread = threading.Thread(target=progress_updater, daemon=True)
+            progress_thread = threading.Thread(target=update_progress_callback, daemon=True)
             progress_thread.start()
-        except ImportError:
-            progress_thread = None
-            stop_flag = None
-    else:
-        progress_thread = None
-        stop_flag = None
 
     log_setup(f"[ASR] Transcribing audio ({audio_duration_seconds:.1f}s duration)...", 'info', verbose)
 
@@ -704,10 +716,14 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
         return_timestamps=True  # Activates Whisper's built-in long-form transcription
     )
 
+    # Stop progress thread and report completion
     if progress_thread is not None:
         stop_flag.set()
         if progress_thread.is_alive():
             progress_thread.join(timeout=1.0)
+
+    if progress_callback:
+        progress_callback(2, "Transcribing audio (ASR)", 100)
 
     # Extract transcript (timestamps are included in chunks, we concatenate the text)
     if "chunks" in result:
@@ -731,7 +747,7 @@ def transcribe_audio(audio_tensor: Any, sample_rate: int, config: Dict[str, Any]
     return transcript
 
 
-def translate_transcript(transcript: str, config: Dict[str, Any]) -> str:
+def translate_transcript(transcript: str, config: Dict[str, Any], progress_callback: Optional[Callable[[int, str, int], None]] = None) -> str:
     """
     Translate transcript to target language using LLM.
     
@@ -757,10 +773,16 @@ def translate_transcript(transcript: str, config: Dict[str, Any]) -> str:
     verbose = get_verbosity()
     log_setup(f"Processing {len(chunks)} chunk(s)...", 'info', verbose)
     translated_parts = []
-    
+
+    total_chunks = len(chunks)
     for i, chunk in enumerate(chunks, 1):
         if len(chunks) > 1:
             log_setup(f"Processing chunk {i}/{len(chunks)}...", 'info', verbose)
+
+        # Report progress before processing chunk
+        if progress_callback:
+            progress = int((i - 1) / total_chunks * 100)
+            progress_callback(3, "Translating transcript", progress)
         
         # Calculate dynamic max_new_tokens based on input length
         # Translation can be up to 1.5x longer than original, so ensure we have enough tokens
@@ -822,7 +844,7 @@ def translate_transcript(transcript: str, config: Dict[str, Any]) -> str:
     return "\n".join(translated_parts).strip()
 
 
-def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
+def summarize_text(translated_text: str, config: Dict[str, Any], progress_callback: Optional[Callable[[int, str, int], None]] = None) -> str:
     """
     Generate key points summary from translated text.
 
@@ -898,12 +920,13 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
         f"Write a concise markdown bulleted list (use '-' bullets) in {target_language}. Do not include any preamble or epilogue."
     )
 
-    for chunk in chunks:
+    total_chunks = len(chunks)
+    for i, chunk in enumerate(chunks):
         messages = [
             {"role": "system", "content": f"You are an expert technical summarizer. Provide summaries in {target_language}."},
             {"role": "user", "content": f"{chunk_prompt_header}\n\nTranscript segment:\n\n{chunk}"},
         ]
-        
+
         try:
             input_ids = tokenizer.apply_chat_template(
                 messages,
@@ -916,22 +939,22 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
                 f"User: {chunk_prompt_header}\n\nTranscript segment:\n\n{chunk}\nAssistant:"
             )
             input_ids = tokenizer(fallback_prompt, return_tensors="pt").input_ids
-        
+
         import torch
         model_device = next(model.parameters()).device
         input_ids = input_ids.to(model_device)
         attention_mask = torch.ones_like(input_ids, dtype=torch.long, device=input_ids.device)
-        
+
         with torch.no_grad():
             output_ids = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 **gen_chunk_kwargs
             )
-        
+
         gen_only = output_ids[0, input_ids.shape[1]:]
         partial = tokenizer.decode(gen_only, skip_special_tokens=True).strip()
-        
+
         # Normalize bullets
         norm_lines = []
         for line in partial.splitlines():
@@ -943,8 +966,16 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
             s = s.replace("**Key Point**:", "").replace("**Key Point**", "").lstrip("- ").strip()
             norm_lines.append(f"- {s}")
         partial_bullets.append("\n".join(norm_lines))
+
+        # Report progress (chunks phase is ~70% of total, aggregation is ~30%)
+        if progress_callback:
+            chunk_progress = int((i + 1) / total_chunks * 70)
+            progress_callback(4, "Generating key points summary", chunk_progress)
     
     # Aggregation
+    if progress_callback:
+        progress_callback(4, "Generating key points summary", 75)
+
     aggregation_prompt = (
         f"You will be given multiple markdown bullet lists produced from segments of the same lecture transcript in {target_language}. "
         "Merge and deduplicate them into a single, concise, well-structured set of bullets. "
@@ -999,15 +1030,17 @@ def summarize_text(translated_text: str, config: Dict[str, Any]) -> str:
     return "\n".join(final_lines)
 
 
-def generate_podcast_script(translated_text: str, summary: str, config: Dict[str, Any]) -> str:
+def generate_podcast_script(translated_text: str, summary: str, config: Dict[str, Any], progress_callback: Optional[Callable[[int, str, int], None]] = None) -> str:
     """
     Generate conversational podcast script from translated transcript and summary.
-    
+    Uses chunking for long transcripts to stay within context limits.
+
     Input:
         translated_text: Translated transcript
         summary: Key points summary
         config: SOLAS_CONFIG dictionary
-    
+        progress_callback: Optional callback for progress updates
+
     Output:
         Podcast script with Host A/B dialogue (str)
     """
@@ -1016,16 +1049,18 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
     podcast_creativity_temp = config.get("podcast_creativity_temp", 0.3)
     max_new_tokens = config.get("podcast_max_new_tokens", 1024)
     target_language = config.get("target_language", "Portuguese")
-    
+    chunk_size_chars = config.get("chunk_size_chars", 4000)
+
     verbose = get_verbosity()
     _suppress_generation_flags_warnings()  # Suppress invalid generation flags warnings
     log_setup(f"[Podcast Script] Loading LLM: {llm_model_id}...", 'info', verbose)
     tokenizer, model = ensure_llm(llm_model_id, quantization)
-    
-    combined = translated_text.strip()
-    if summary:
-        combined += "\n\n---\nKey Points Summary (for structure):\n" + summary
-    
+
+    # Chunk the transcript if it's too long
+    chunks = chunk_text(translated_text.strip(), chunk_size_chars)
+    total_chunks = len(chunks)
+    log_setup(f"[Podcast Script] Processing {total_chunks} segment(s)...", 'info', verbose)
+
     system_prompt = (
         f"You are a scriptwriter for an educational podcast. Create a two-host conversation in {target_language} that is engaging, "
         "technically accurate, and pedagogically effective. Use plain language and helpful analogies. "
@@ -1033,68 +1068,138 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
         "Avoid meta commentary, stage directions, or non-dialogue text. "
         f"All dialogue content must be written in {target_language}."
     )
-    
-    user_prompt = (
-        f"Write a podcast script in {target_language} using BOTH inputs below:\n"
-        "1) Translated transcript: treat this as the primary factual source.\n"
-        "2) Key points summary: use this to structure the flow and ensure coverage of salient topics.\n"
-        "Requirements:\n"
-        "- Host A explains; Host B asks concise, clarifying questions.\n"
-        "- Keep it focused, progressive, and practical; prefer short turns.\n"
-        f"- All dialogue must be in {target_language}.\n"
-        "- Strictly output alternating lines beginning with 'Host A:' or 'Host B:' and nothing else.\n\n"
-        f"INPUTS:\n\n{combined}"
-    )
-    
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-    
+
     gen_kwargs = {
         "max_new_tokens": max_new_tokens,
         "do_sample": False,
         "pad_token_id": tokenizer.eos_token_id,
         "eos_token_id": tokenizer.eos_token_id,
     }
-    
-    try:
-        input_ids = tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            return_tensors="pt",
-        )
-    except Exception:
-        fallback_prompt = f"System: {system_prompt}\nUser: {user_prompt}\nAssistant:"
-        input_ids = tokenizer(fallback_prompt, return_tensors="pt").input_ids
-    
+
     import torch
     model_device = next(model.parameters()).device
-    input_ids = input_ids.to(model_device)
-    attention_mask = torch.ones_like(input_ids, dtype=torch.long, device=model_device)
-    
-    with torch.no_grad():
-        output_ids = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
-    
-    gen_only = output_ids[0, input_ids.shape[1]:]
-    script = tokenizer.decode(gen_only, skip_special_tokens=True).strip()
-    
-    # Enforce label format
-    lines = [line.strip() for line in script.splitlines() if line.strip()]
-    fixed_lines = []
+
+    script_segments = []
+    previous_context = ""
+
+    for i, chunk in enumerate(chunks):
+        if total_chunks > 1:
+            log_setup(f"[Podcast Script] Processing segment {i+1}/{total_chunks}...", 'info', verbose)
+
+        # Report progress
+        if progress_callback:
+            progress = int((i / total_chunks) * 85)  # 0-85% for generation, 85-100% for stitching
+            progress_callback(5, "Generating podcast script", progress)
+
+        # Build prompt for this chunk
+        if i == 0:
+            # First chunk: introduce the podcast
+            user_prompt = (
+                f"Write the BEGINNING of a podcast script in {target_language}.\n"
+                "Start with a brief introduction where Host A welcomes listeners and introduces the topic.\n"
+                f"Use the transcript segment and summary below to create the opening discussion.\n\n"
+                f"Summary (for structure):\n{summary}\n\n"
+                f"Transcript segment:\n{chunk}\n\n"
+                "Requirements:\n"
+                "- Host A explains; Host B asks concise, clarifying questions.\n"
+                f"- All dialogue must be in {target_language}.\n"
+                "- Strictly output alternating lines beginning with 'Host A:' or 'Host B:' and nothing else."
+            )
+        elif i == total_chunks - 1:
+            # Last chunk: conclude the podcast
+            user_prompt = (
+                f"Continue and CONCLUDE the podcast script in {target_language}.\n"
+                f"Previous context:\n{previous_context}\n\n"
+                f"Transcript segment:\n{chunk}\n\n"
+                "Requirements:\n"
+                "- Continue naturally from the previous dialogue.\n"
+                "- Cover the remaining content and wrap up with a brief conclusion.\n"
+                "- Host A thanks listeners; Host B adds a final thought.\n"
+                f"- All dialogue must be in {target_language}.\n"
+                "- Strictly output alternating lines beginning with 'Host A:' or 'Host B:' and nothing else."
+            )
+        else:
+            # Middle chunks: continue the conversation
+            user_prompt = (
+                f"Continue the podcast script in {target_language}.\n"
+                f"Previous context:\n{previous_context}\n\n"
+                f"Transcript segment:\n{chunk}\n\n"
+                "Requirements:\n"
+                "- Continue naturally from the previous dialogue.\n"
+                "- Cover the new content in this segment.\n"
+                f"- All dialogue must be in {target_language}.\n"
+                "- Strictly output alternating lines beginning with 'Host A:' or 'Host B:' and nothing else."
+            )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        try:
+            input_ids = tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                return_tensors="pt",
+            )
+        except Exception:
+            fallback_prompt = f"System: {system_prompt}\nUser: {user_prompt}\nAssistant:"
+            input_ids = tokenizer(fallback_prompt, return_tensors="pt").input_ids
+
+        input_ids = input_ids.to(model_device)
+        attention_mask = torch.ones_like(input_ids, dtype=torch.long, device=model_device)
+
+        with torch.no_grad():
+            output_ids = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
+
+        gen_only = output_ids[0, input_ids.shape[1]:]
+        segment_script = tokenizer.decode(gen_only, skip_special_tokens=True).strip()
+
+        # Enforce label format for this segment
+        lines = [line.strip() for line in segment_script.splitlines() if line.strip()]
+        fixed_lines = []
+        expected = "Host A:"
+        for line in lines:
+            if line.startswith("Host A:") or line.startswith("Host B:"):
+                fixed_lines.append(line)
+                expected = "Host B:" if line.startswith("Host A:") else "Host A:"
+            else:
+                fixed_lines.append(f"{expected} {line}")
+                expected = "Host B:" if expected == "Host A:" else "Host A:"
+
+        segment_text = "\n".join(fixed_lines)
+        script_segments.append(segment_text)
+
+        # Keep last 2-3 lines as context for next chunk
+        context_lines = fixed_lines[-3:] if len(fixed_lines) >= 3 else fixed_lines
+        previous_context = "\n".join(context_lines)
+
+    # Combine all segments
+    if progress_callback:
+        progress_callback(5, "Generating podcast script", 90)
+
+    full_script = "\n".join(script_segments)
+
+    # Final cleanup pass: ensure alternating speakers throughout
+    if progress_callback:
+        progress_callback(5, "Generating podcast script", 95)
+
+    all_lines = [line.strip() for line in full_script.splitlines() if line.strip()]
+    final_lines = []
     expected = "Host A:"
-    for line in lines:
+
+    for line in all_lines:
         if line.startswith("Host A:") or line.startswith("Host B:"):
-            fixed_lines.append(line)
+            final_lines.append(line)
             expected = "Host B:" if line.startswith("Host A:") else "Host A:"
         else:
-            fixed_lines.append(f"{expected} {line}")
+            final_lines.append(f"{expected} {line}")
             expected = "Host B:" if expected == "Host A:" else "Host A:"
-    
-    return "\n".join(fixed_lines)
+
+    return "\n".join(final_lines)
 
 
-def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
+def synthesize_podcast(script: str, config: Dict[str, Any], progress_callback: Optional[Callable[[int, str, int], None]] = None) -> str:
     """
     Synthesize podcast audio from script using Coqui XTTS.
     
@@ -1237,6 +1342,14 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
     lines = [line.strip() for line in script.splitlines() if line.strip()]
     segments = []
 
+    # Calculate total chunks for progress tracking
+    total_chunks = 0
+    for line in lines:
+        text = line.split(":", 1)[1].strip() if ":" in line else line
+        if text:
+            total_chunks += len(chunk_text(text, max_length=250))
+
+    processed_chunks = 0
     for line in lines:
         speaker = "A" if line.startswith("Host A:") else ("B" if line.startswith("Host B:") else None)
         text = line.split(":", 1)[1].strip() if ":" in line else line
@@ -1262,6 +1375,12 @@ def synthesize_podcast(script: str, config: Dict[str, Any]) -> str:
             if wav.ndim == 2:
                 wav = wav.mean(axis=1)
             segments.append(wav)
+
+            # Report progress
+            processed_chunks += 1
+            if progress_callback and total_chunks > 0:
+                progress = int((processed_chunks / total_chunks) * 100)
+                progress_callback(6, "Synthesizing podcast audio (TTS)", progress)
     
     if not segments:
         raise RuntimeError("No audio segments were generated.")
@@ -1330,10 +1449,8 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     if progress_callback:
         progress_callback(2, "Transcribing audio (ASR)", 0)
     stage_start = time.time()
-    original_transcript = transcribe_audio(audio_tensor, sample_rate, config)
+    original_transcript = transcribe_audio(audio_tensor, sample_rate, config, progress_callback)
     performance_metrics["asr"] = _collect_performance_metrics("asr", stage_start)
-    if progress_callback:
-        progress_callback(2, "Transcribing audio (ASR)", 100)
     log_setup(f"✓ Stage 2 complete ({performance_metrics['asr']['time_seconds']:.2f}s)", 'success', verbose)
     log_setup(f"Transcript length: {len(original_transcript)} characters", 'info', verbose)
     
@@ -1342,7 +1459,7 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     if progress_callback:
         progress_callback(3, "Translating transcript", 0)
     stage_start = time.time()
-    translated_transcript = translate_transcript(original_transcript, config)
+    translated_transcript = translate_transcript(original_transcript, config, progress_callback)
     performance_metrics["translation"] = _collect_performance_metrics("translation", stage_start)
     if progress_callback:
         progress_callback(3, "Translating transcript", 100)
@@ -1353,7 +1470,7 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     if progress_callback:
         progress_callback(4, "Generating key points summary", 0)
     stage_start = time.time()
-    key_points_summary = summarize_text(translated_transcript, config)
+    key_points_summary = summarize_text(translated_transcript, config, progress_callback)
     performance_metrics["summary"] = _collect_performance_metrics("summary", stage_start)
     if progress_callback:
         progress_callback(4, "Generating key points summary", 100)
@@ -1364,7 +1481,7 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     if progress_callback:
         progress_callback(5, "Generating podcast script", 0)
     stage_start = time.time()
-    podcast_script = generate_podcast_script(translated_transcript, key_points_summary, config)
+    podcast_script = generate_podcast_script(translated_transcript, key_points_summary, config, progress_callback)
     performance_metrics["podcast_script"] = _collect_performance_metrics("podcast_script", stage_start)
     if progress_callback:
         progress_callback(5, "Generating podcast script", 100)
@@ -1375,7 +1492,7 @@ def run_pipeline(config: Dict[str, Any], progress_callback: Optional[Callable[[i
     if progress_callback:
         progress_callback(6, "Synthesizing podcast audio (TTS)", 0)
     stage_start = time.time()
-    podcast_audio_path = synthesize_podcast(podcast_script, config)
+    podcast_audio_path = synthesize_podcast(podcast_script, config, progress_callback)
     tts_metrics = _collect_performance_metrics("tts", stage_start)
     if progress_callback:
         progress_callback(6, "Synthesizing podcast audio (TTS)", 100)

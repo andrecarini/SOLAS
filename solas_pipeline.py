@@ -760,7 +760,8 @@ def translate_transcript(transcript: str, config: Dict[str, Any], progress_callb
     """
     llm_model_id = config["llm_model_id"]
     quantization = config.get("quantization")
-    chunk_size_chars = config.get("chunk_size_chars", 4000)
+    chunk_size_chars = config.get("chunk_size_chars", 2000)
+    repetition_penalty = config.get("repetition_penalty", 1.2)
     target_language = config.get("target_language", "Portuguese")
     max_new_tokens = config.get("translation_max_new_tokens", 1024)
     
@@ -793,7 +794,7 @@ def translate_transcript(transcript: str, config: Dict[str, Any], progress_callb
         gen_kwargs = {
             "max_new_tokens": dynamic_max_tokens,
             "do_sample": False,
-            "repetition_penalty": 1.2,  # Prevent repetition loops
+            "repetition_penalty": repetition_penalty,
             "pad_token_id": tokenizer.eos_token_id,
             "eos_token_id": tokenizer.eos_token_id,
         }
@@ -858,7 +859,8 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
     """
     llm_model_id = config["llm_model_id"]
     quantization = config.get("quantization")
-    chunk_size_chars = config.get("chunk_size_chars", 4000)
+    chunk_size_chars = config.get("chunk_size_chars", 2000)
+    repetition_penalty = config.get("repetition_penalty", 1.2)
     summary_mode = config.get("summary_mode", "greedy")
     max_new_tokens = config.get("summary_max_new_tokens", 512)
     target_language = config.get("target_language", "English")
@@ -882,7 +884,7 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
             do_sample=True,
             temperature=0.2,
             top_p=0.9,
-            repetition_penalty=1.2,  # Prevent repetition loops
+            repetition_penalty=repetition_penalty,
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
@@ -894,20 +896,20 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
         gen_config = GenerationConfig(
             max_new_tokens=max_new_tokens,
             do_sample=False,
-            repetition_penalty=1.2,  # Prevent repetition loops
+            repetition_penalty=repetition_penalty,
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
         gen_chunk_kwargs = {
             "generation_config": gen_config
         }
-    
+
     # Aggregation generation kwargs
     if summary_mode == "hybrid":
         gen_config_agg = GenerationConfig(
             max_new_tokens=max_new_tokens,
             do_sample=False,
-            repetition_penalty=1.2,  # Prevent repetition loops
+            repetition_penalty=repetition_penalty,
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
@@ -1052,8 +1054,9 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
     quantization = config.get("quantization")
     podcast_creativity_temp = config.get("podcast_creativity_temp", 0.3)
     max_new_tokens = config.get("podcast_max_new_tokens", 1024)
+    repetition_penalty = config.get("repetition_penalty", 1.2)
     target_language = config.get("target_language", "Portuguese")
-    chunk_size_chars = config.get("chunk_size_chars", 4000)
+    chunk_size_chars = config.get("chunk_size_chars", 2000)
 
     verbose = get_verbosity()
     _suppress_generation_flags_warnings()  # Suppress invalid generation flags warnings
@@ -1076,7 +1079,7 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
     gen_kwargs = {
         "max_new_tokens": max_new_tokens,
         "do_sample": False,
-        "repetition_penalty": 1.2,  # Prevent repetition loops
+        "repetition_penalty": repetition_penalty,
         "pad_token_id": tokenizer.eos_token_id,
         "eos_token_id": tokenizer.eos_token_id,
     }
@@ -2631,6 +2634,11 @@ def create_config_widgets():
             value=2000,
             description='Chunk Size:'
         ),
+        "repetition_penalty_dropdown": widgets.Dropdown(
+            options=[1.2, 1.8],
+            value=1.2,
+            description='Repetition Penalty:'
+        ),
         "summary_mode_dropdown": widgets.Dropdown(
             options=["greedy", "sampled", "hybrid"],
             value="greedy",
@@ -2693,6 +2701,7 @@ def create_config_widgets():
         widgets_dict["llm_dropdown"],
         widgets_dict["quantization_dropdown"],
         widgets_dict["chunk_size_dropdown"],
+        widgets_dict["repetition_penalty_dropdown"],
         widgets_dict["summary_mode_dropdown"],
         widgets_dict["podcast_temp_slider"],
         widgets_dict["source_lang_dropdown"],
@@ -2872,6 +2881,7 @@ def build_config_from_widgets(widgets_dict):
         "llm_model_id": widgets_dict["llm_dropdown"].value,
         "quantization": quantization_value,
         "chunk_size_chars": widgets_dict["chunk_size_dropdown"].value,
+        "repetition_penalty": widgets_dict["repetition_penalty_dropdown"].value,
         "summary_mode": widgets_dict["summary_mode_dropdown"].value,
         "podcast_creativity_temp": widgets_dict["podcast_temp_slider"].value,
         

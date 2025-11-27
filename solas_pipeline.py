@@ -793,6 +793,7 @@ def translate_transcript(transcript: str, config: Dict[str, Any], progress_callb
         gen_kwargs = {
             "max_new_tokens": dynamic_max_tokens,
             "do_sample": False,
+            "repetition_penalty": 1.2,  # Prevent repetition loops
             "pad_token_id": tokenizer.eos_token_id,
             "eos_token_id": tokenizer.eos_token_id,
         }
@@ -881,6 +882,7 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
             do_sample=True,
             temperature=0.2,
             top_p=0.9,
+            repetition_penalty=1.2,  # Prevent repetition loops
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
@@ -892,6 +894,7 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
         gen_config = GenerationConfig(
             max_new_tokens=max_new_tokens,
             do_sample=False,
+            repetition_penalty=1.2,  # Prevent repetition loops
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
@@ -904,6 +907,7 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
         gen_config_agg = GenerationConfig(
             max_new_tokens=max_new_tokens,
             do_sample=False,
+            repetition_penalty=1.2,  # Prevent repetition loops
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
@@ -1072,6 +1076,7 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
     gen_kwargs = {
         "max_new_tokens": max_new_tokens,
         "do_sample": False,
+        "repetition_penalty": 1.2,  # Prevent repetition loops
         "pad_token_id": tokenizer.eos_token_id,
         "eos_token_id": tokenizer.eos_token_id,
     }

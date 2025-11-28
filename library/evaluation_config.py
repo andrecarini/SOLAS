@@ -28,7 +28,7 @@ BASELINE = {
     'llm_model_id': 'microsoft/phi-3-mini-4k-instruct',
     'quantization': '4-bit',
     'chunk_size_chars': 2000,
-    'repetition_penalty': 1.2,
+    'repetition_penalty': None,
     'source_language': 'Portuguese',
     'target_language': 'English',
     'summary_mode': 'greedy',
@@ -44,28 +44,28 @@ BEST_PARAMS_PER_MODEL = {
     'Qwen/Qwen2-0.5B-Instruct': {
         'quantization': None,  # Small model, no need for quantization
         'chunk_size_chars': 2000,  # Smaller chunks for smaller context
-        'repetition_penalty': 1.2,
+        'repetition_penalty': None,
         'summary_mode': 'greedy',
         'podcast_creativity_temp': 0.3,
     },
     'Qwen/Qwen2-1.5B-Instruct': {
         'quantization': None,  # Still small enough to run without quantization
         'chunk_size_chars': 2000,
-        'repetition_penalty': 1.2,
+        'repetition_penalty': None,
         'summary_mode': 'greedy',
         'podcast_creativity_temp': 0.3,
     },
     'microsoft/phi-3-mini-4k-instruct': {
         'quantization': '4-bit',  # Benefits from quantization
         'chunk_size_chars': 2000,
-        'repetition_penalty': 1.2,
+        'repetition_penalty': None,
         'summary_mode': 'greedy',
         'podcast_creativity_temp': 0.3,
     },
     'mistralai/Mistral-7B-Instruct-v0.3': {
         'quantization': '4-bit',  # Requires quantization for T4
         'chunk_size_chars': 2000,
-        'repetition_penalty': 1.2,
+        'repetition_penalty': None,
         'summary_mode': 'greedy',
         'podcast_creativity_temp': 0.5,  # Mistral handles higher temp well
     },
@@ -105,7 +105,7 @@ def generate_experiments() -> List[Dict[str, Any]]:
         'mistralai/Mistral-7B-Instruct-v0.3',
     ]
     for llm_model in penalty_test_models:
-        for penalty in [None, 1.2, 1.8]:
+        for penalty in [None, 1.2]:
             penalty_label = 'none' if penalty is None else str(penalty)
             experiments.append({
                 'id': f'penalty_{llm_model.split("/")[-1]}_{penalty_label}',

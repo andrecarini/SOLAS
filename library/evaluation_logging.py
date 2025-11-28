@@ -33,7 +33,7 @@ def log(message: str, level: str = 'info') -> None:
     elif level == 'success':
         print(f"{DIM}[{timestamp}]{RESET} {GREEN}[OK]{RESET} {GREEN}{message}{RESET}")
     elif level == 'stage':
-        print(f"{DIM}[{timestamp}]{RESET} {CYAN}{BOLD}[STAGE]{RESET} {CYAN}{message}{RESET}")
+        print(f"{DIM}[{timestamp}]{RESET} {CYAN}{BOLD}[EXP]{RESET} {CYAN}{message}{RESET}")
     elif level == 'detail':
         print(f"{DIM}[{timestamp}]{RESET} {DIM}       {message}{RESET}")
     elif level == 'header':

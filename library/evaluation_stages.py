@@ -7,6 +7,7 @@ import time
 import torch
 import numpy as np
 from typing import Dict, Any, Tuple
+from tqdm import tqdm
 from solas_pipeline import load_and_preprocess_audio, chunk_text
 
 
@@ -121,12 +122,11 @@ def run_translation_stage(
     # Chunk text
     chunks = chunk_text(transcript, chunk_size_chars)
     result['input']['num_chunks'] = len(chunks)
-    log_fn(f"Processing {len(chunks)} chunks...", 'detail')
 
     translated_parts = []
 
     with metrics_collector_cls('translation') as collector:
-        for i, chunk in enumerate(chunks):
+        for chunk in tqdm(chunks, desc="Translating", unit="chunk", leave=False):
             # Calculate dynamic max_new_tokens based on input length
             # Translation can be up to 1.5x longer than original
             chunk_tokens = len(tokenizer.encode(chunk, add_special_tokens=False))
@@ -228,7 +228,6 @@ def run_summary_stage(
 
     chunks = chunk_text(translated_text, chunk_size_chars)
     result['input']['num_chunks'] = len(chunks)
-    log_fn(f"Summarizing {len(chunks)} chunks (mode={summary_mode})...", 'detail')
 
     partial_bullets = []
 
@@ -262,7 +261,7 @@ def run_summary_stage(
 
     with metrics_collector_cls('summary') as collector:
         # PHASE 1: Generate partial summaries for each chunk
-        for i, chunk in enumerate(chunks):
+        for chunk in tqdm(chunks, desc="Summarizing", unit="chunk", leave=False):
             messages = [
                 {'role': 'system', 'content': f"You are an expert technical summarizer. Provide summaries in {target_language}."},
                 {'role': 'user', 'content': f"{chunk_prompt_header}\n\nTranscript segment:\n\n{chunk}"},
@@ -423,7 +422,6 @@ def run_podcast_stage(
     chunks = chunk_text(translated_text.strip(), chunk_size_chars)
     total_chunks = len(chunks)
     result['input']['num_chunks'] = total_chunks
-    log_fn(f"Generating script for {total_chunks} chunks...", 'detail')
 
     # System prompt matching solas_pipeline.py
     system_prompt = (
@@ -449,7 +447,8 @@ def run_podcast_stage(
     previous_context = ''
 
     with metrics_collector_cls('podcast') as collector:
-        for i, chunk in enumerate(chunks):
+        pbar = tqdm(enumerate(chunks), total=total_chunks, desc="Podcast script", unit="chunk", leave=False)
+        for i, chunk in pbar:
             # Build prompt based on position - matching solas_pipeline.py structure
             if i == 0:
                 # First chunk: introduce the podcast

@@ -260,12 +260,13 @@ def unload_llm():
     """Explicitly unload current LLM from memory."""
     global _current_llm
     if _current_llm['model'] is not None:
-        # Move model to CPU first if it's on GPU (helps with device_map='auto' cleanup)
+        # Move model to CPU before deletion for better VRAM cleanup
+        # (1-2s overhead per switch, but ensures clean GPU state)
         try:
             if hasattr(_current_llm['model'], 'cpu'):
                 _current_llm['model'].cpu()
-        except:
-            pass  # Ignore errors for quantized models
+        except Exception:
+            pass  # Quantized models can't move to CPU, will be deleted anyway
 
         del _current_llm['model']
         del _current_llm['tokenizer']

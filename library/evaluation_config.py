@@ -99,7 +99,12 @@ def generate_experiments() -> List[Dict[str, Any]]:
             })
 
     # EXPERIMENT 3: Repetition Penalty Impact
-    for llm_model in LLM_MODELS:
+    # Only test smallest (Qwen2-0.5B) and largest (Mistral-7B) models
+    penalty_test_models = [
+        'Qwen/Qwen2-0.5B-Instruct',
+        'mistralai/Mistral-7B-Instruct-v0.3',
+    ]
+    for llm_model in penalty_test_models:
         for penalty in [None, 1.2, 1.8]:
             penalty_label = 'none' if penalty is None else str(penalty)
             experiments.append({

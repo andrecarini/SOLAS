@@ -22,7 +22,12 @@ from .evaluation_utils import (
     setup_gdrive_mount,
 )
 from .evaluation_runner import run_evaluation
-from .evaluation_display import display_results_summary, export_for_analysis
+from .evaluation_display import (
+    display_results_summary,
+    export_for_analysis,
+    run_thesis_analysis,
+    setup_notebooklm_comparison,
+)
 
 
 class EvaluationNotebook:
@@ -195,3 +200,41 @@ class EvaluationNotebook:
 
         log(f"\nTo preview: evaluation.run_evaluation(dry_run=True)", 'info')
         log(f"To run all: evaluation.run_evaluation()", 'info')
+
+    def run_thesis_analysis(
+        self,
+        solas_podcast_path: Optional[Path] = None,
+        notebooklm_podcast_path: Optional[Path] = None,
+    ):
+        """
+        Run comprehensive analysis for thesis inclusion.
+        Generates plots, LaTeX tables, and optional NotebookLM comparison.
+
+        Args:
+            solas_podcast_path: Optional path to SOLAS podcast script for comparison
+            notebooklm_podcast_path: Optional path to NotebookLM transcript for comparison
+        """
+        if self._results_cache is None:
+            self._results_cache = self.load_results()
+
+        return run_thesis_analysis(
+            results=self._results_cache,
+            drive_base=self.drive_base,
+            log_fn=log,
+            solas_podcast_path=solas_podcast_path,
+            notebooklm_podcast_path=notebooklm_podcast_path,
+        )
+
+    def setup_notebooklm_comparison(self):
+        """
+        Set up directories and instructions for NotebookLM comparison.
+        Creates folder structure and copies SOLAS outputs.
+        """
+        if self._results_cache is None:
+            self._results_cache = self.load_results()
+
+        return setup_notebooklm_comparison(
+            results=self._results_cache,
+            drive_base=self.drive_base,
+            log_fn=log,
+        )

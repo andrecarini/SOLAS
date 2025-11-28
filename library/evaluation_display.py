@@ -3,9 +3,27 @@ Results display and export functions for SOLAS evaluation.
 """
 
 import csv
+import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from collections import defaultdict
+
+# Import analysis module (optional - gracefully handles missing dependencies)
+try:
+    from .evaluation_analysis import (
+        run_full_analysis,
+        load_results_as_dataframe,
+        compare_outputs,
+        create_blind_evaluation_template,
+        generate_all_latex_tables,
+        PANDAS_AVAILABLE,
+        MATPLOTLIB_AVAILABLE,
+    )
+    ANALYSIS_AVAILABLE = True
+except ImportError:
+    ANALYSIS_AVAILABLE = False
+    PANDAS_AVAILABLE = False
+    MATPLOTLIB_AVAILABLE = False
 
 
 def display_results_summary(results: Dict[str, Any], results_file: Path, outputs_dir: Path, log_fn):
@@ -198,3 +216,205 @@ def export_for_analysis(results: Dict[str, Any], drive_base: Path, log_fn):
         log_fn(f"Exported: {export_dir / 'all_experiments.csv'}", 'success')
 
     log_fn(f"\nAll exports saved to: {export_dir}", 'info')
+
+
+def run_thesis_analysis(
+    results: Dict[str, Any],
+    drive_base: Path,
+    log_fn,
+    solas_podcast_path: Optional[Path] = None,
+    notebooklm_podcast_path: Optional[Path] = None,
+):
+    """
+    Run comprehensive analysis for thesis inclusion.
+    Generates plots, LaTeX tables, and optional NotebookLM comparison.
+
+    Args:
+        results: Evaluation results dictionary
+        drive_base: Base directory for output files
+        log_fn: Logging function
+        solas_podcast_path: Optional path to SOLAS podcast script
+        notebooklm_podcast_path: Optional path to NotebookLM podcast transcript
+    """
+    if not ANALYSIS_AVAILABLE:
+        log_fn("Analysis module not available. Install pandas and matplotlib:", 'warning')
+        log_fn("  pip install pandas matplotlib seaborn", 'info')
+        return
+
+    if not results.get('experiments'):
+        log_fn("No results to analyze.", 'warning')
+        return
+
+    # Load optional comparison texts
+    solas_podcast = None
+    notebooklm_podcast = None
+
+    if solas_podcast_path and solas_podcast_path.exists():
+        with open(solas_podcast_path, 'r', encoding='utf-8') as f:
+            solas_podcast = f.read()
+        log_fn(f"Loaded SOLAS podcast from: {solas_podcast_path}", 'info')
+
+    if notebooklm_podcast_path and notebooklm_podcast_path.exists():
+        with open(notebooklm_podcast_path, 'r', encoding='utf-8') as f:
+            notebooklm_podcast = f.read()
+        log_fn(f"Loaded NotebookLM podcast from: {notebooklm_podcast_path}", 'info')
+
+    # Run full analysis
+    analysis_dir = drive_base / 'thesis_analysis'
+    generated = run_full_analysis(
+        results=results,
+        output_dir=analysis_dir,
+        solas_podcast=solas_podcast,
+        notebooklm_podcast=notebooklm_podcast,
+        log_fn=log_fn,
+    )
+
+    # Report generated files
+    log_fn("Thesis Analysis Complete", 'header')
+
+    if generated.get('plots'):
+        log_fn("Generated plots:", 'info')
+        for name, path in generated['plots'].items():
+            log_fn(f"  - {name}: {path}", 'detail')
+
+    if generated.get('tables'):
+        log_fn("Generated LaTeX tables:", 'info')
+        for name, path in generated['tables'].items():
+            log_fn(f"  - {name}: {path}", 'detail')
+
+    if generated.get('comparison'):
+        log_fn("Generated comparison files:", 'info')
+        for name, path in generated['comparison'].items():
+            log_fn(f"  - {name}: {path}", 'detail')
+
+    log_fn(f"\nAll thesis materials saved to: {analysis_dir}", 'success')
+    return generated
+
+
+def setup_notebooklm_comparison(
+    results: Dict[str, Any],
+    drive_base: Path,
+    log_fn,
+):
+    """
+    Set up directories and instructions for NotebookLM comparison.
+    Creates the folder structure and README with instructions.
+    """
+    comparison_dir = drive_base / 'notebooklm_comparison'
+    comparison_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create subdirectories
+    (comparison_dir / 'solas_outputs').mkdir(exist_ok=True)
+    (comparison_dir / 'notebooklm_outputs').mkdir(exist_ok=True)
+
+    # Find best experiment output to use for comparison
+    best_exp = None
+    if results.get('experiments'):
+        # Prefer best_params with phi-3-mini or mistral
+        for exp_id, exp in results['experiments'].items():
+            if 'error' not in exp and exp.get('experiment_type') == 'best_params':
+                if 'phi-3' in exp.get('config', {}).get('llm_model_id', '').lower():
+                    best_exp = exp
+                    break
+                if 'mistral' in exp.get('config', {}).get('llm_model_id', '').lower():
+                    best_exp = exp
+
+    # Copy SOLAS outputs if available
+    if best_exp:
+        stages_data = best_exp.get('stages_data', {})
+
+        # Save translation
+        trans_text = stages_data.get('translation', {}).get('output', {}).get('translated_text', '')
+        if trans_text:
+            with open(comparison_dir / 'solas_outputs' / 'translation.txt', 'w', encoding='utf-8') as f:
+                f.write(trans_text)
+
+        # Save summary
+        sum_text = stages_data.get('summary', {}).get('output', {}).get('summary', '')
+        if sum_text:
+            with open(comparison_dir / 'solas_outputs' / 'summary.txt', 'w', encoding='utf-8') as f:
+                f.write(sum_text)
+
+        # Save podcast
+        pod_text = stages_data.get('podcast', {}).get('output', {}).get('script', '')
+        if pod_text:
+            with open(comparison_dir / 'solas_outputs' / 'podcast_script.txt', 'w', encoding='utf-8') as f:
+                f.write(pod_text)
+
+        log_fn(f"Copied SOLAS outputs from experiment: {best_exp['id']}", 'success')
+
+    # Create README with instructions
+    readme = """# NotebookLM Comparison Setup
+
+## Overview
+This directory contains materials for comparing SOLAS outputs with Google NotebookLM.
+
+## Directory Structure
+```
+notebooklm_comparison/
+├── solas_outputs/
+│   ├── translation.txt      # SOLAS translated text
+│   ├── summary.txt          # SOLAS summary
+│   └── podcast_script.txt   # SOLAS podcast script
+├── notebooklm_outputs/
+│   ├── briefing_doc.txt     # NotebookLM briefing document (copy here)
+│   └── podcast_transcript.txt  # NotebookLM audio overview transcript (copy here)
+└── README.md                # This file
+```
+
+## Instructions
+
+### Step 1: Upload to NotebookLM
+1. Go to https://notebooklm.google.com/
+2. Create a new notebook
+3. Upload `solas_outputs/translation.txt` as a source
+
+### Step 2: Generate NotebookLM Outputs
+
+#### For Briefing Document:
+1. In NotebookLM chat, ask: "Create a bulleted summary of the most important concepts, definitions, and takeaways from this lecture transcript. Limit to 10-15 key points."
+2. Copy the response to `notebooklm_outputs/briefing_doc.txt`
+
+#### For Podcast/Audio Overview:
+1. Click "Generate" -> "Audio Overview"
+2. Optional: Use customization prompt: "Focus on the key technical concepts and make the discussion educational. Explain any complex terms in simple language. Target audience: university students learning the subject."
+3. Wait for generation to complete
+4. If transcript is available, copy it to `notebooklm_outputs/podcast_transcript.txt`
+5. If no transcript, download the audio and transcribe it using Whisper
+
+### Step 3: Run Comparison Analysis
+After placing NotebookLM outputs in the correct locations, run:
+
+```python
+evaluation.run_thesis_analysis(
+    solas_podcast_path=Path('notebooklm_comparison/solas_outputs/podcast_script.txt'),
+    notebooklm_podcast_path=Path('notebooklm_comparison/notebooklm_outputs/podcast_transcript.txt'),
+)
+```
+
+## Evaluation Rubric
+
+When manually evaluating outputs, use this rubric:
+
+| Criterion | 1 (Poor) | 3 (Adequate) | 5 (Excellent) |
+|-----------|----------|--------------|---------------|
+| Accuracy | Major factual errors | Minor errors | Factually correct |
+| Completeness | Missing key points | Most points covered | All key points |
+| Fluency | Awkward/robotic | Readable | Natural/engaging |
+| Structure | Disorganized | Logical flow | Clear progression |
+| Engagement | Boring/dry | Informative | Engaging dialogue |
+"""
+
+    with open(comparison_dir / 'README.md', 'w', encoding='utf-8') as f:
+        f.write(readme)
+
+    log_fn("NotebookLM Comparison Setup", 'header')
+    log_fn(f"Created comparison directory: {comparison_dir}", 'success')
+    log_fn("Next steps:", 'info')
+    log_fn("  1. Upload translation.txt to NotebookLM", 'detail')
+    log_fn("  2. Generate briefing document and audio overview", 'detail')
+    log_fn("  3. Save outputs to notebooklm_outputs/ folder", 'detail')
+    log_fn("  4. Run evaluation.run_thesis_analysis() with paths", 'detail')
+    log_fn(f"\nSee {comparison_dir / 'README.md'} for detailed instructions", 'info')
+
+    return comparison_dir

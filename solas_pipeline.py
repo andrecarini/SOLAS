@@ -761,7 +761,8 @@ def translate_transcript(transcript: str, config: Dict[str, Any], progress_callb
     llm_model_id = config["llm_model_id"]
     quantization = config.get("quantization")
     chunk_size_chars = config.get("chunk_size_chars", 2000)
-    repetition_penalty = config.get("repetition_penalty", 1.2)
+    # Default to 1.2 only if key is absent; allow explicit None for no penalty
+    repetition_penalty = config["repetition_penalty"] if "repetition_penalty" in config else 1.2
     target_language = config.get("target_language", "Portuguese")
     max_new_tokens = config.get("translation_max_new_tokens", 1024)
     
@@ -794,10 +795,11 @@ def translate_transcript(transcript: str, config: Dict[str, Any], progress_callb
         gen_kwargs = {
             "max_new_tokens": dynamic_max_tokens,
             "do_sample": False,
-            "repetition_penalty": repetition_penalty,
             "pad_token_id": tokenizer.eos_token_id,
             "eos_token_id": tokenizer.eos_token_id,
         }
+        if repetition_penalty is not None:
+            gen_kwargs["repetition_penalty"] = repetition_penalty
         system_prompt = (
             f"You are a professional technical translator. Translate the provided transcript into {target_language}. "
             "Be faithful, precise, and complete. Preserve technical terms whenever possible. "
@@ -860,7 +862,8 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
     llm_model_id = config["llm_model_id"]
     quantization = config.get("quantization")
     chunk_size_chars = config.get("chunk_size_chars", 2000)
-    repetition_penalty = config.get("repetition_penalty", 1.2)
+    # Default to 1.2 only if key is absent; allow explicit None for no penalty
+    repetition_penalty = config["repetition_penalty"] if "repetition_penalty" in config else 1.2
     summary_mode = config.get("summary_mode", "greedy")
     max_new_tokens = config.get("summary_max_new_tokens", 512)
     target_language = config.get("target_language", "English")
@@ -877,16 +880,23 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
     
     # Chunk-level generation kwargs
     from transformers import GenerationConfig
+
+    # Build base config dict, conditionally adding repetition_penalty
+    base_config = {
+        "max_new_tokens": max_new_tokens,
+        "pad_token_id": tokenizer.eos_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+    }
+    if repetition_penalty is not None:
+        base_config["repetition_penalty"] = repetition_penalty
+
     if summary_mode == "sampled":
         # Use GenerationConfig for all generation parameters to avoid warnings
         gen_config = GenerationConfig(
-            max_new_tokens=max_new_tokens,
+            **base_config,
             do_sample=True,
             temperature=0.2,
             top_p=0.9,
-            repetition_penalty=repetition_penalty,
-            pad_token_id=tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
         )
         gen_chunk_kwargs = {
             "generation_config": gen_config
@@ -894,11 +904,8 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
     else:
         # Use GenerationConfig for greedy mode too to avoid model default config issues
         gen_config = GenerationConfig(
-            max_new_tokens=max_new_tokens,
+            **base_config,
             do_sample=False,
-            repetition_penalty=repetition_penalty,
-            pad_token_id=tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
         )
         gen_chunk_kwargs = {
             "generation_config": gen_config
@@ -907,11 +914,8 @@ def summarize_text(translated_text: str, config: Dict[str, Any], progress_callba
     # Aggregation generation kwargs
     if summary_mode == "hybrid":
         gen_config_agg = GenerationConfig(
-            max_new_tokens=max_new_tokens,
+            **base_config,
             do_sample=False,
-            repetition_penalty=repetition_penalty,
-            pad_token_id=tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
         )
         gen_agg_kwargs = {
             "generation_config": gen_config_agg
@@ -1054,7 +1058,8 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
     quantization = config.get("quantization")
     podcast_creativity_temp = config.get("podcast_creativity_temp", 0.3)
     max_new_tokens = config.get("podcast_max_new_tokens", 1024)
-    repetition_penalty = config.get("repetition_penalty", 1.2)
+    # Default to 1.2 only if key is absent; allow explicit None for no penalty
+    repetition_penalty = config["repetition_penalty"] if "repetition_penalty" in config else 1.2
     target_language = config.get("target_language", "Portuguese")
     chunk_size_chars = config.get("chunk_size_chars", 2000)
 
@@ -1079,10 +1084,11 @@ def generate_podcast_script(translated_text: str, summary: str, config: Dict[str
     gen_kwargs = {
         "max_new_tokens": max_new_tokens,
         "do_sample": False,
-        "repetition_penalty": repetition_penalty,
         "pad_token_id": tokenizer.eos_token_id,
         "eos_token_id": tokenizer.eos_token_id,
     }
+    if repetition_penalty is not None:
+        gen_kwargs["repetition_penalty"] = repetition_penalty
 
     import torch
     model_device = next(model.parameters()).device
@@ -2635,7 +2641,7 @@ def create_config_widgets():
             description='Chunk Size:'
         ),
         "repetition_penalty_dropdown": widgets.Dropdown(
-            options=[1.2, 1.8],
+            options=[("None (no penalty)", "none"), ("1.2 (default)", 1.2), ("1.8 (aggressive)", 1.8)],
             value=1.2,
             description='Repetition Penalty:'
         ),
@@ -2874,14 +2880,19 @@ def build_config_from_widgets(widgets_dict):
     quantization_value = widgets_dict["quantization_dropdown"].value
     if quantization_value == "None":
         quantization_value = None
-    
+
+    # Convert repetition_penalty "none" string to Python None
+    repetition_penalty_value = widgets_dict["repetition_penalty_dropdown"].value
+    if repetition_penalty_value == "none":
+        repetition_penalty_value = None
+
     return {
         # Variable inputs
         "asr_model_id": widgets_dict["asr_dropdown"].value,
         "llm_model_id": widgets_dict["llm_dropdown"].value,
         "quantization": quantization_value,
         "chunk_size_chars": widgets_dict["chunk_size_dropdown"].value,
-        "repetition_penalty": widgets_dict["repetition_penalty_dropdown"].value,
+        "repetition_penalty": repetition_penalty_value,
         "summary_mode": widgets_dict["summary_mode_dropdown"].value,
         "podcast_creativity_temp": widgets_dict["podcast_temp_slider"].value,
         

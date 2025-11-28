@@ -16,6 +16,51 @@ from typing import Dict, Any, List, Optional, Tuple
 import torch
 import psutil
 
+# Disable transformers progress bars to avoid third-party widget CDN notice in Colab
+# These progress bars use ipywidgets which trigger the external CDN warning
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+
+
+# =============================================================================
+# GOOGLE DRIVE SETUP
+# =============================================================================
+def setup_gdrive_mount(mount_point='/gdrive', folder_name='SOLAS', symlink_path='/content/gdrive'):
+    """
+    Mount Google Drive and create symlink for easy access (Colab only).
+
+    Args:
+        mount_point: Where to mount Google Drive (default: /gdrive)
+        folder_name: Folder name in MyDrive to use (default: SOLAS)
+        symlink_path: Where to create the symlink (default: /content/gdrive)
+
+    Returns:
+        Path to the symlinked folder, or None if not in Colab
+    """
+    if 'google.colab' not in sys.modules:
+        return None
+
+    from google.colab import drive
+    import subprocess
+
+    # Mount Google Drive
+    mydrive_path = Path(mount_point) / 'MyDrive'
+    if not mydrive_path.exists():
+        drive.mount(mount_point)
+
+    # Create target folder in Google Drive
+    gdrive_folder = mydrive_path / folder_name
+    gdrive_folder.mkdir(parents=True, exist_ok=True)
+
+    # Create symlink for easy access
+    symlink = Path(symlink_path)
+    if not symlink.exists():
+        subprocess.run(['ln', '-s', str(gdrive_folder), str(symlink)], check=True)
+
+    print(f"✓ Google Drive mounted at {mount_point}")
+    print(f"✓ {folder_name} folder accessible at {symlink_path}/")
+
+    return symlink
+
 
 # =============================================================================
 # HARDWARE INFORMATION
@@ -215,6 +260,13 @@ def unload_llm():
     """Explicitly unload current LLM from memory."""
     global _current_llm
     if _current_llm['model'] is not None:
+        # Move model to CPU first if it's on GPU (helps with device_map='auto' cleanup)
+        try:
+            if hasattr(_current_llm['model'], 'cpu'):
+                _current_llm['model'].cpu()
+        except:
+            pass  # Ignore errors for quantized models
+
         del _current_llm['model']
         del _current_llm['tokenizer']
         _current_llm = {'model_id': None, 'quantization': None, 'tokenizer': None, 'model': None, 'load_time_seconds': None}

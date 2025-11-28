@@ -3,6 +3,7 @@ Notebook interface for SOLAS evaluation.
 Provides a simplified API for the Jupyter notebook.
 """
 
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -18,6 +19,7 @@ from .evaluation_utils import (
     is_experiment_complete as util_is_experiment_complete,
     load_cached_transcript as util_load_cached_transcript,
     save_cached_transcript as util_save_cached_transcript,
+    setup_gdrive_mount,
 )
 from .evaluation_runner import run_evaluation
 from .evaluation_display import display_results_summary, export_for_analysis
@@ -29,23 +31,62 @@ class EvaluationNotebook:
     Handles all the wiring between library components and notebook state.
     """
 
-    def __init__(self, solas_dir: Path, drive_base: Path):
+    def __init__(
+        self,
+        solas_dir: Optional[Path] = None,
+        use_gdrive: Optional[bool] = None,
+        gdrive_mount_point: str = '/gdrive',
+        gdrive_folder: str = 'SOLAS',
+        gdrive_symlink: str = '/content/gdrive',
+        local_dir: str = './evaluation_results'
+    ):
         """
         Initialize the evaluation notebook interface.
 
         Args:
-            solas_dir: Path to SOLAS repository
-            drive_base: Path to Google Drive results directory
+            solas_dir: Path to SOLAS repository (default: ./SOLAS or /content/SOLAS)
+            use_gdrive: Use Google Drive for storage (default: auto-detect Colab)
+            gdrive_mount_point: Where to mount Google Drive (default: /gdrive)
+            gdrive_folder: Folder name in Google Drive MyDrive (default: SOLAS)
+            gdrive_symlink: Symlink path for easy access (default: /content/gdrive)
+            local_dir: Local directory for results when not using Google Drive
         """
-        self.solas_dir = solas_dir
-        self.drive_base = drive_base
-        self.outputs_dir = drive_base / 'outputs'
+        # Auto-detect environment
+        in_colab = 'google.colab' in sys.modules
+        if use_gdrive is None:
+            use_gdrive = in_colab
+
+        # Determine SOLAS directory
+        if solas_dir is None:
+            solas_dir = Path('/content/SOLAS' if in_colab else './SOLAS')
+        self.solas_dir = Path(solas_dir)
+
+        # Setup storage based on environment
+        if use_gdrive:
+            # Mount Google Drive and get symlink path
+            symlink_path = setup_gdrive_mount(
+                mount_point=gdrive_mount_point,
+                folder_name=gdrive_folder,
+                symlink_path=gdrive_symlink
+            )
+            if symlink_path:
+                self.drive_base = symlink_path / 'evaluation_results'
+            else:
+                # Fallback if mounting failed
+                log("Google Drive mounting failed, using local storage", 'warning')
+                self.drive_base = Path(local_dir)
+        else:
+            # Use local storage
+            self.drive_base = Path(local_dir)
+
+        # Create output directories
+        self.outputs_dir = self.drive_base / 'outputs'
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
 
         # Paths
-        self.audio_path = str(solas_dir / 'input_audio_samples' / 'long.ogg')
-        self.results_file = drive_base / 'evaluation_results.json'
-        self.transcript_cache_file = drive_base / 'cached_transcript.json'
+        self.audio_path = str(self.solas_dir / 'input_audio_samples' / 'long.ogg')
+        self.results_file = self.drive_base / 'evaluation_results.json'
+        self.transcript_cache_file = self.drive_base / 'cached_transcript.json'
 
         # Configuration
         self.hardware_info = get_hardware_info()

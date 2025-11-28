@@ -6,6 +6,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Callable
+from tqdm import tqdm
 
 from .evaluation_config import sort_experiments_for_efficiency
 from .evaluation_utils import (
@@ -109,10 +110,22 @@ def run_evaluation(
 
     transcript_cache = load_cached_transcript_fn()
 
-    for i, exp in enumerate(remaining):
+    # Create progress bar for experiments (text-based, no widgets)
+    pbar = tqdm(
+        remaining,
+        desc="Experiments",
+        unit="exp",
+        ncols=100,
+        bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+    )
+
+    for i, exp in enumerate(pbar):
         exp_id = exp['id']
         config = exp['config']
         stages = exp['stages']
+
+        # Update progress bar description
+        pbar.set_description(f"Exp {i+1}/{len(remaining)}: {exp['description'][:40]}")
 
         log_fn(f"[{i+1}/{len(remaining)}] {exp['description']}", 'stage')
         log_fn(f"Stages: {stages}", 'detail')
@@ -208,6 +221,9 @@ def run_evaluation(
             save_results_fn(results)
 
         clear_gpu_memory()
+
+    # Close progress bar
+    pbar.close()
 
     unload_all_models()
 

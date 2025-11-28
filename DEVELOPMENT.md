@@ -2,11 +2,16 @@
 
 ### Colab Widget CDN Notice
 
-**Problem**: Using `widgets.HTML()` triggers Colab's "Third-party Jupyter widgets" CDN notice panel.
+**Problem**: Using `widgets.HTML()` or transformers model loading progress bars triggers Colab's "Third-party Jupyter widgets" CDN notice panel.
 
-**Solution**: 
+**Root Causes**:
+1. Using `widgets.HTML()` directly
+2. Transformers library showing progress bars when loading models (uses tqdm with ipywidgets)
+
+**Solutions**:
 - For static labels: Use `widgets.Label()` with `label.style.font_weight = 'bold'`
 - For styled content: Use `widgets.Output()` + `display(HTML(...))`
+- For transformers progress bars: Set `os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'` before any transformers imports
 
 ```python
 # ❌ Triggers CDN notice
@@ -20,6 +25,11 @@ label.style.font_weight = 'bold'
 output = widgets.Output()
 with output:
     display(HTML('<b style="color: green;">My Styled Content</b>'))
+
+# ✅ No CDN notice - disable transformers progress bars
+import os
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+from transformers import AutoModel  # Now won't show notebook-style progress bars
 ```
 
 ### File Encoding on Windows
